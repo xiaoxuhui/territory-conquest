@@ -18,13 +18,14 @@ export const LEVELS = [
 ];
 export function seededRandom(seed) { return () => { let t=seed+=0x6D2B79F5;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296; }; }
 export class Game {
-  constructor({w=10,h=8,ai=1,difficulty='normal',seed=1}={}) {
-    if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(ai)||ai<1||ai>7) throw new Error('地图或人数不合法');
-    this.w=w;this.h=h;this.ai=ai;this.difficulty=difficulty;this.rng=seededRandom(seed);
+  constructor({w=10,h=8,humans=1,ai=1,difficulty='normal',seed=1}={}) {
+    const players=humans+ai;
+    if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(humans)||humans<0||!Number.isInteger(ai)||ai<0||players<1||players>8||players>(w-2)*(h-2)) throw new Error('人类与电脑合计需为 1–8 位，且地图必须能容纳所有玩家');
+    this.w=w;this.h=h;this.humans=humans;this.ai=ai;this.players=players;this.currentHuman=humans?0:null;this.difficulty=difficulty;this.rng=seededRandom(seed);
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1}));
-    this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;
+    this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;
     const places=[this.w+1];
-    while(places.length<ai+1) {
+    while(places.length<players) {
       let best=-1,score=-1;
       for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++) {
         const id=y*w+x;if(places.includes(id))continue;
@@ -38,7 +39,9 @@ export class Game {
     this.addEvent('所有阵营已就位，从一格开始。','system');
   }
   neighbors(id){const x=id%this.w,y=Math.floor(id/this.w);return [x>0?id-1:-1,x<this.w-1?id+1:-1,y>0?id-this.w:-1,y<this.h-1?id+this.w:-1].filter(i=>i>=0);}
-  stats(){return FACTIONS.slice(0,this.ai+1).map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
+  isHuman(owner){return Number.isInteger(owner)&&owner>=0&&owner<this.humans;}
+  aliveHumans(){return Array.from({length:this.humans},(_,id)=>id).filter(id=>this.cells.some(c=>c.owner===id));}
+  stats(){return FACTIONS.slice(0,this.players).map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
   addEvent(text,kind='system',owner=-1){this.events.unshift({text,kind,owner,time:this.time});this.events=this.events.slice(0,30);}
   sent(from,ratio=0.5){return Math.max(0,Math.min(from.army-1,Math.floor(from.army*Math.min(1,Math.max(0,ratio)))));}
   attack(fromId,toId,owner,ratio=0.5){
@@ -56,7 +59,7 @@ export class Game {
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${FACTIONS[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
     else if(oldOwner>=0)this.addEvent(`${FACTIONS[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);
-    if(owner===0){this.moves++;if(captured)this.captures++;}
+    if(this.isHuman(owner)){this.moves++;if(captured)this.captures++;}
     if(captured&&oldOwner>=0){
       this.addEvent(`${FACTIONS[owner].name}攻占了${FACTIONS[oldOwner].name}的领土`,'battle',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${FACTIONS[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
@@ -68,7 +71,8 @@ export class Game {
   get resolving(){return this.pendingTurn!==null;}
   playTurn(fromId,toId,ratio=0.5,options={}){
     if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
-    const result=this.attack(fromId,toId,0,ratio);
+    if(this.currentHuman===null)return {ok:false,reason:'当前没有轮到人类玩家'};
+    const result=this.attack(fromId,toId,this.currentHuman,ratio);
     if(result.ok)result.actions=this.finishTurn([{...result}],options);
     return result;
   }
@@ -78,17 +82,22 @@ export class Game {
     return {ok:true,actions:this.finishTurn([],options)};
   }
   finishTurn(actions,{defer=false}={}){
-    this.turn++;
+    if(!this.roundState){this.turn++;this.roundState={actions:[],contested:new Set(),actedHumans:new Set()};}
+    const round=this.roundState;
+    round.actions.push(...actions);actions.forEach(a=>this.recordCombat(a));
+    if(this.currentHuman!==null)round.actedHumans.add(this.currentHuman);
     if(this.winner!==null)return actions;
-    // Preserve the immediate combat state so the UI can show it before responses.
-    this.pendingTurn={actions,index:0,contested:new Set()};
-    actions.forEach(a=>this.recordCombat(a));
+    // Each local human gets one action before any computer or growth phase.
+    const nextHuman=this.aliveHumans().find(id=>!round.actedHumans.has(id));
+    if(nextHuman!==undefined){this.currentHuman=nextHuman;return actions;}
+    this.currentHuman=null;
+    this.pendingTurn={actions:round.actions,index:0,contested:round.contested};
     if(!defer)while(this.resolving)this.stepTurn();
-    return actions;
+    return this.pendingTurn?actions:round.actions;
   }
   recordCombat(action){
     if(action?.ok&&action.oldOwner>=0&&action.oldOwner!==action.owner){
-      this.pendingTurn.contested.add(action.fromId);this.pendingTurn.contested.add(action.toId);
+      this.roundState.contested.add(action.fromId);this.roundState.contested.add(action.toId);
     }
   }
   stepTurn(){
@@ -97,7 +106,7 @@ export class Game {
     if(this.winner!==null){this.pendingTurn=null;return null;}
     if(pending.index<this.ai){
       // Rotate initiative; each computer still receives just one action.
-      const owner=1+(this.turn-1+pending.index++)%this.ai;
+      const owner=this.humans+(this.turn-1+pending.index++)%this.ai;
       const action=this.aiMove(owner);
       if(action?.ok){pending.actions.push(action);this.recordCombat(action);}
       if(this.winner!==null)this.pendingTurn=null;
@@ -112,7 +121,8 @@ export class Game {
         changes.push({id:c.id,owner:c.owner,before,after:c.army,amount:c.army-before});
       }
     });
-    this.pendingTurn=null;this.checkWinner();return {kind:'growth',changes};
+    this.pendingTurn=null;this.roundState=null;this.currentHuman=this.aliveHumans()[0]??null;
+    this.checkWinner();return {kind:'growth',changes};
   }
   update(dt){
     if(!this.running||this.paused||this.winner!==null)return [];

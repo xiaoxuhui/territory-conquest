@@ -102,3 +102,47 @@ test('staged turns pause safely, cannot double-submit, and produce the same fina
   staged.paused=false;while(staged.resolving)staged.stepTurn();
   assert.deepEqual(staged.cells,immediate.cells);assert.equal(staged.turn,immediate.turn);
 });
+test('zero computers, eight local humans, and AI-only games share equal one-tile starts',()=>{
+  for(const [humans,ai] of [[1,0],[2,0],[8,0],[0,8],[0,1],[3,5]]){
+    const g=new Game({humans,ai});assert.equal(g.players,humans+ai);assert.equal(g.stats().length,humans+ai);
+    assert.ok(g.stats().every(s=>s.land===1&&s.army===20));assert.equal(g.stats().filter(s=>s.human).length,humans);
+    assert.equal(g.currentHuman,humans?0:null);
+  }
+  for(const options of [{humans:0,ai:0},{humans:8,ai:1},{humans:-1,ai:2},{humans:1,ai:-1},{humans:1.5,ai:1}])assert.throws(()=>new Game(options));
+});
+test('a solo human with no AI does not win until the full map is occupied',()=>{
+  const g=new Game({ai:0});g.running=true;assert.equal(g.winner,null);
+  assert.equal(g.playTurn(11,12).ok,true);assert.equal(g.turn,1);assert.equal(g.currentHuman,0);
+  assert.equal(g.cells[11].army,13);assert.equal(g.cells[12].army,11);assert.equal(g.winner,null);
+  assert.equal(g.waitTurn().ok,true);assert.equal(g.turn,2);assert.equal(g.currentHuman,0);
+});
+test('two local humans control different factions and grow only after both act',()=>{
+  const g=new Game({humans:2,ai:0});g.running=true;
+  g.playTurn(11,12);assert.equal(g.currentHuman,1);assert.equal(g.turn,1);assert.equal(g.resolving,false);
+  assert.equal(g.cells[11].army,10);assert.equal(g.cells[g.spawns[1]].army,20);
+  assert.equal(g.playTurn(11,21).ok,false);assert.equal(g.currentHuman,1);
+  const p2=g.spawns[1],target=g.neighbors(p2).find(id=>g.cells[id].owner===-1);
+  g.playTurn(p2,target);assert.equal(g.currentHuman,0);assert.equal(g.turn,1);assert.equal(g.cells[target].owner,1);
+  assert.equal(g.cells[11].army,13);assert.equal(g.cells[p2].army,13);
+});
+test('computers act once per full human round and their ids start after all humans',()=>{
+  const g=new Game({humans:3,ai:2});g.running=true;const calls=[];g.aiMove=id=>{calls.push(id);return null;};
+  g.waitTurn();assert.equal(g.currentHuman,1);assert.deepEqual(calls,[]);
+  g.waitTurn();assert.equal(g.currentHuman,2);assert.deepEqual(calls,[]);
+  g.waitTurn();assert.equal(g.currentHuman,0);assert.deepEqual(calls,[3,4]);assert.equal(g.turn,1);
+  assert.ok(g.stats().every(s=>s.army===23));
+});
+test('eliminated human players are skipped while other local humans can still play',()=>{
+  const g=new Game({humans:3,ai:0});g.running=true;
+  Object.assign(g.cells[g.spawns[1]],{owner:-1,army:0,capital:-1});
+  Object.assign(g.cells[11],{owner:0,army:30});Object.assign(g.cells[12],{owner:1,army:1,capital:1});
+  g.playTurn(11,12);assert.deepEqual(g.aliveHumans(),[0,2]);assert.equal(g.currentHuman,2);
+  g.waitTurn();assert.equal(g.currentHuman,0);assert.equal(g.winner,null);
+});
+test('AI-only rounds include faction zero and do not grant human control',()=>{
+  const g=new Game({humans:0,ai:3});g.running=true;const calls=[],move=g.aiMove.bind(g);
+  g.aiMove=id=>{calls.push(id);return move(id);};
+  assert.equal(g.playTurn(g.spawns[0],g.spawns[0]+1).ok,false);
+  g.waitTurn();assert.deepEqual(calls,[0,1,2]);assert.equal(g.currentHuman,null);assert.equal(g.turn,1);
+  assert.equal(g.moves,0);assert.ok(g.stats().every(s=>!s.human));
+});
