@@ -22,7 +22,7 @@ export class Game {
     if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(ai)||ai<1||ai>7) throw new Error('地图或人数不合法');
     this.w=w;this.h=h;this.ai=ai;this.difficulty=difficulty;this.rng=seededRandom(seed);
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1}));
-    this.time=0;this.growth=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;
+    this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;
     const places=[this.w+1];
     while(places.length<ai+1) {
       let best=-1,score=-1;
@@ -35,7 +35,6 @@ export class Game {
     }
     this.spawns=places;
     places.forEach((id,owner)=>Object.assign(this.cells[id],{owner,army:20,capital:owner}));
-    this.aiTimers=Array.from({length:ai+1},(_,i)=>i*0.18);
     this.addEvent('所有阵营已就位，从一格开始。','system');
   }
   neighbors(id){const x=id%this.w,y=Math.floor(id/this.w);return [x>0?id-1:-1,x<this.w-1?id+1:-1,y>0?id-this.w:-1,y<this.h-1?id+this.w:-1].filter(i=>i>=0);}
@@ -48,31 +47,78 @@ export class Game {
     if(!from||!to||from.owner!==owner||!this.neighbors(fromId).includes(toId))return {ok:false,reason:'只能向上下左右相邻的领土出兵'};
     const amount=this.sent(from,ratio);
     if(amount<1)return {ok:false,reason:'兵力不足，至少留守 1 名士兵'};
-    const oldOwner=to.owner;from.army-=amount;
+    const oldOwner=to.owner,fromBefore=from.army,toBefore=to.army;from.army-=amount;
     let captured=false;
     if(to.owner===owner)to.army+=amount;
     else if(amount>to.army){to.army=amount-to.army;to.owner=owner;captured=true;}
     else to.army-=amount;
+    const kind=oldOwner===owner?'reinforce':'attack';
+    const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
+    if(kind==='reinforce')this.addEvent(`${FACTIONS[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
+    else if(oldOwner>=0)this.addEvent(`${FACTIONS[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);
     if(owner===0){this.moves++;if(captured)this.captures++;}
     if(captured&&oldOwner>=0){
       this.addEvent(`${FACTIONS[owner].name}攻占了${FACTIONS[oldOwner].name}的领土`,'battle',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${FACTIONS[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
     }
     this.checkWinner();
-    return {ok:true,amount,captured,oldOwner,owner,toId,fromId};
+    return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
   }
   checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${FACTIONS[owner].name}占领全图，获得胜利！`,'victory',owner);}}
+  get resolving(){return this.pendingTurn!==null;}
+  playTurn(fromId,toId,ratio=0.5,options={}){
+    if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
+    const result=this.attack(fromId,toId,0,ratio);
+    if(result.ok)result.actions=this.finishTurn([{...result}],options);
+    return result;
+  }
+  waitTurn(options={}){
+    if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'战斗尚未进行'};
+    if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
+    return {ok:true,actions:this.finishTurn([],options)};
+  }
+  finishTurn(actions,{defer=false}={}){
+    this.turn++;
+    if(this.winner!==null)return actions;
+    // Preserve the immediate combat state so the UI can show it before responses.
+    this.pendingTurn={actions,index:0,contested:new Set()};
+    actions.forEach(a=>this.recordCombat(a));
+    if(!defer)while(this.resolving)this.stepTurn();
+    return actions;
+  }
+  recordCombat(action){
+    if(action?.ok&&action.oldOwner>=0&&action.oldOwner!==action.owner){
+      this.pendingTurn.contested.add(action.fromId);this.pendingTurn.contested.add(action.toId);
+    }
+  }
+  stepTurn(){
+    const pending=this.pendingTurn;
+    if(!pending||this.paused)return null;
+    if(this.winner!==null){this.pendingTurn=null;return null;}
+    if(pending.index<this.ai){
+      // Rotate initiative; each computer still receives just one action.
+      const owner=1+(this.turn-1+pending.index++)%this.ai;
+      const action=this.aiMove(owner);
+      if(action?.ok){pending.actions.push(action);this.recordCombat(action);}
+      if(this.winner!==null)this.pendingTurn=null;
+      return {kind:'action',owner,action};
+    }
+    const changes=[];
+    this.cells.forEach(c=>{
+      // Fighting suppresses passive growth for both sides, including capitals.
+      // Friendly reinforcements remain valid and are separate, recorded actions.
+      if(c.owner>=0&&c.army<999&&!pending.contested.has(c.id)){
+        const before=c.army;c.army=Math.min(999,c.army+(c.capital===c.owner?3:1));
+        changes.push({id:c.id,owner:c.owner,before,after:c.army,amount:c.army-before});
+      }
+    });
+    this.pendingTurn=null;this.checkWinner();return {kind:'growth',changes};
+  }
   update(dt){
     if(!this.running||this.paused||this.winner!==null)return [];
-    dt=Math.max(0,Math.min(dt,0.25));this.time+=dt;this.growth+=dt;
-    while(this.growth>=1.6){this.growth-=1.6;this.cells.forEach(c=>{if(c.owner>=0&&c.army<999)c.army=Math.min(999,c.army+(c.capital===c.owner?3:1));});}
-    const actions=[];
-    const interval=({easy:1.6,normal:0.95,hard:0.48})[this.difficulty]??0.95;
-    for(let id=1;id<=this.ai;id++) {
-      this.aiTimers[id]-=dt;
-      if(this.aiTimers[id]<=0){this.aiTimers[id]=interval*(0.9+this.rng()*0.2);const action=this.aiMove(id);if(action)actions.push(action);}
-    }
-    this.checkWinner();return actions;
+    // Wall-clock time is informational. Thinking, hovering and selecting never
+    // advance armies, growth or computer actions.
+    this.time+=Math.max(0,Math.min(dt,0.25));return [];
   }
   aiMove(owner){
     const owned=this.cells.filter(c=>c.owner===owner);if(!owned.length)return null;
@@ -83,7 +129,7 @@ export class Game {
         const t=this.cells[n];if(t.owner===owner)continue;
         if(c.army-1>t.army){
           const empty=t.owner===-1;
-          const ratio=empty?Math.min(1,Math.max(0.35,2/c.army)):1;
+          const ratio=empty?0.5:1;
           const open=this.neighbors(n).filter(i=>this.cells[i].owner!==owner).length;
           let score=empty?3+open*0.4:5+(c.army-t.army)*0.025;
           if(t.capital===t.owner&&t.owner>=0)score+=2;

@@ -4,12 +4,12 @@ const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.f
 let wins=[];
 try{const saved=JSON.parse(localStorage.getItem('territory-wins')||'[]');if(Array.isArray(saved))wins=saved.filter(n=>Number.isInteger(n)&&n>=0&&n<6);}catch{}
 let config={mode:'campaign',level:0,difficulty:'normal',ai:3,w:14,h:10};
-let game,selected=null,hovered=null,ratio=.5,speed=1,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
-let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0;
+let game,selected=null,hovered=null,ratio=.5,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
+let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null;
 const flashes=new Map();
 function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
 function setupGame(){
-  game=new Game(currentOptions());selected=null;hovered=null;spectating=false;resultShown=false;flashes.clear();lastLog='';
+  game=new Game(currentOptions());selected=null;hovered=null;spectating=false;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;
   $('resultDialog').close();$('pauseOverlay').hidden=true;
   const l=LEVELS[config.level];
   $('mapTitle').innerHTML=config.mode==='campaign'?`${l.name}<span>${String(config.level+1).padStart(2,'0')}</span>`:'自由征途<span>∞</span>';
@@ -38,41 +38,65 @@ function renderSettings(){
   $('completedLabel').textContent=`${wins.length} / 6 完成`;
   $('levelList').innerHTML=LEVELS.map((l,i)=>`<button class="level ${config.level===i?'active':''}" data-level="${i}" aria-pressed="${config.level===i}"><span class="level-num">${String(i+1).padStart(2,'0')}</span><span><span class="level-title">${l.name}</span><span class="level-details">${l.w} × ${l.h} · ${l.ai} 位电脑</span></span>${wins.includes(i)?'<span class="level-check" aria-label="已通关">✓</span>':''}</button>`).join('');
   document.querySelectorAll('[data-diff]').forEach(el=>{el.classList.toggle('active',el.dataset.diff===config.difficulty);el.setAttribute('aria-pressed',el.dataset.diff===config.difficulty);});
-  const copy={easy:['从容练习','电脑行动较慢，适合熟悉扩张与进攻。'],normal:['均衡决策','电脑会扩张、集结兵力，并寻找进攻机会。'],hard:['快速博弈','电脑行动更快，擅长集中兵力争夺前线。']}[config.difficulty];
+  const copy={easy:['从容练习','电脑随机选择可行进攻。你思考时，对手不动。'],normal:['均衡决策','电脑会扩张与集结。每回合最多行动一次。'],hard:['谋定而动','电脑更善于选择目标，每回合仍只行动一次。']}[config.difficulty];
   $('difficultyTag').textContent=copy[0];$('difficultyDesc').textContent=copy[1];
   $('aiCount').textContent=config.ai;$('minusAI').disabled=config.ai<=1;$('plusAI').disabled=config.ai>=7;$('mapSize').value=`${config.w},${config.h}`;
 }
 function requestReset(fn){
-  if(game.time>0&&game.winner===null&&!resultShown){resetWasPaused=game.paused;game.paused=true;pendingReset=fn;$('confirmDialog').showModal();render();}
+  if(game.running&&game.winner===null&&!resultShown){resetWasPaused=game.paused;game.paused=true;pendingReset=fn;$('confirmDialog').showModal();render();}
   else{fn();setupGame();}
 }
 function cancelReset(){pendingReset=null;$('confirmDialog').close();game.paused=resetWasPaused;renderSettings();render();}
-function start(){game.running=true;game.paused=false;game.addEvent('战斗开始！选中青绿色领土，向相邻格子出兵。');tone(370);render();}
+function start(){game.running=true;game.paused=false;game.addEvent('轮到你了。你行动一次，各电脑最多行动一次。');tone(370);render();}
 function togglePause(){if(!game.running)return;game.paused=!game.paused;render();}
 function toast(msg){$('toast').textContent=msg;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,2600);}
 function tone(freq=500){if(!sound)return;try{audioCtx??=new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type='sine';o.frequency.value=freq;g.gain.setValueAtTime(.045,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+.12);o.connect(g).connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+.13);}catch{}}
 function clickTile(id){
   if(game.winner!==null||spectating){selected=id;render();return;}
+  if(game.resolving){toast('正在显示本回合行动，结算结束后轮到你');return;}
   if(game.paused){toast('战局已暂停，继续战斗后即可出兵');return;}
   if(!game.running){if(game.cells[id].owner===0){selected=id;render();}toast('点击「开始征战」，开启你的征途');return;}
   if(id===selected){selected=null;render();return;}
   const cell=game.cells[id];
   if(selected!==null&&game.cells[selected].owner===0&&game.neighbors(selected).includes(id)){
-    const result=game.attack(selected,id,0,ratio);
+    const result=game.playTurn(selected,id,ratio,{defer:true});
     if(!result.ok){toast(result.reason);return;}
-    flashes.set(id,{until:performance.now()+350,captured:result.captured});
+    flashActions(result.actions);
+    lastBattle={action:result,reinforced:0,grew:0};resolutionAt=performance.now()+550;
     tone(result.captured?680:300);
     if(cell.owner===0)selected=id;
-    else if(result.amount>0)toast(`消耗敌方 ${result.amount} 兵力，等待增援后再进攻`);
+    else if(result.amount>0)toast(`派出 ${result.amount}，守军 ${result.toBefore} → ${result.toAfter}；未攻占`);
     if(result.captured&&result.oldOwner===-1&&game.captures===1)game.addEvent('首块领土已占领！领土越多，兵力增长越快。','system',0);
+    if(selected!==null&&game.cells[selected].owner!==0)selected=null;
     checkResult();render();return;
   }
   if(cell.owner===0){selected=id;render();}
   else toast(selected===null?'先点击一块青绿色己方领土':'只能进攻上下左右相邻的格子');
 }
 function coord(id){return `${String.fromCharCode(65+id%game.w)}${Math.floor(id/game.w)+1}`;}
+function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.toId,{until:performance.now()+350,captured:a.captured});}
+function waitTurn(){const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=performance.now()+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==0)selected=null;checkResult();render();}
+function advanceResolution(now){
+  if(!game.resolving||game.paused||now<resolutionAt)return;
+  const phase=game.stepTurn();if(!phase)return;
+  if(phase.action?.ok){
+    flashActions([phase.action]);
+    if(lastBattle&&phase.action.toId===lastBattle.action.toId&&phase.action.kind==='reinforce')lastBattle.reinforced+=phase.action.amount;
+  }
+  if(lastBattle&&phase.kind==='growth')lastBattle.grew=phase.changes.find(c=>c.id===lastBattle.action.toId)?.amount||0;
+  resolutionAt=now+(phase.action?.ok?420:100);
+  checkResult();render();
+}
+function renderBattleResult(){
+  $('combatResult').hidden=!lastBattle;if(!lastBattle)return;
+  const {action:a,reinforced,grew}=lastBattle;
+  $('combatResult').textContent=a.kind==='reinforce'
+    ? `己方增援 ${coord(a.toId)}：${a.toBefore} + ${a.amount} = ${a.toAfter}`
+    : `你派出 ${a.amount} · 守军 ${a.toBefore} − ${Math.min(a.amount,a.toBefore)} = ${Math.max(0,a.toBefore-a.amount)}${a.captured?` · 已攻占，驻军 ${a.toAfter}`:' · 未攻占'}${reinforced?` · 随后增援 +${reinforced}`:''}${grew?` · 回合增兵 +${grew}`:''}${a.oldOwner>=0?' · 交战格本回合不自动增兵':''}`;
+}
 function render(){
-  const neighbors=selected!==null&&game.cells[selected]?.owner===0&&game.running&&!game.paused&&!spectating?game.neighbors(selected):[];
+  const neighbors=selected!==null&&game.cells[selected]?.owner===0&&game.running&&!game.paused&&!game.resolving&&!spectating?game.neighbors(selected):[];
+  $('board').setAttribute('aria-busy',game.resolving);
   const now=performance.now();
   game.cells.forEach((c,i)=>{
     const el=tiles[i],f=c.owner>=0?FACTIONS[c.owner]:null,flash=flashes.get(i);
@@ -86,18 +110,22 @@ function render(){
     if(el.innerHTML!==html)el.innerHTML=html;
   });
   $('timer').textContent=formatTime(game.time);
+  $('turnLabel').textContent=`第 ${game.turn} 回合`;
+  $('waitBtn').hidden=!game.running;$('waitBtn').disabled=game.paused||game.resolving;
+  $('waitBtn').textContent=spectating?'推进一回合':'蓄兵一回合';
   const ended=game.winner!==null;
-  $('gameState').textContent=ended?'战斗结束':spectating?'观战中':game.paused?'战局暂停':game.running?'交战中':'准备就绪';
+  $('gameState').textContent=ended?'战斗结束':game.paused?'战局暂停':game.resolving?'回合结算中':spectating?'观战中':game.running?'轮到你了':'准备就绪';
   $('gameState').classList.toggle('running',game.running&&!game.paused);
   $('pauseBtn').disabled=!game.running;$('pauseBtn').setAttribute('aria-label',game.paused?'继续游戏':'暂停游戏');$('pauseBtn').innerHTML=`<svg><use href="#i-${game.paused?'play':'pause'}"/></svg>`;
   $('pauseOverlay').hidden=!game.paused||!game.running||$('helpDialog').open||$('confirmDialog').open||$('resultDialog').open;
   $('startBtn').hidden=game.running||game.time>0||ended;$('troopControl').hidden=!game.running||spectating;
   if(ended){$('hintTitle').textContent=game.winner===0?'全境归你，征途完成！':`${FACTIONS[game.winner].name}统一了全境`;$('hintText').textContent='选择新关卡，或者点击重开再战一局。';}
-  else if(spectating){$('hintTitle').textContent='观战模式';$('hintText').textContent='剩余阵营继续争夺，直到一方占领全图。';}
-  else if(!game.running){$('hintTitle').textContent='从你的第一块领土开始';$('hintText').textContent='准备好后开始战斗，青绿色领土属于你。';}
+  else if(game.resolving){$('hintTitle').textContent='正在结算本回合';$('hintText').textContent='先显示战斗扣兵，再显示电脑行动和增兵。';}
+  else if(spectating){$('hintTitle').textContent='观战模式';$('hintText').textContent='点击「推进一回合」查看剩余阵营的争夺。';}
+  else if(!game.running){$('hintTitle').textContent='从你的第一块领土开始';$('hintText').textContent='回合制对战，你思考时电脑不动。';}
   else if(game.paused){$('hintTitle').textContent='战局已暂停';$('hintText').textContent='点击继续，或按空格键返回战斗。';}
-  else if(selected!==null&&game.cells[selected].owner===0){const c=game.cells[selected];$('hintTitle').textContent=`${coord(selected)} 已选中 · 可派出 ${game.sent(c,ratio)} 兵力`;$('hintText').textContent='点击高亮的相邻格子出兵；再次点击已选格取消。';}
-  else{$('hintTitle').textContent='选择领土，继续扩张';$('hintText').textContent='点击一块青绿色领土，再点相邻格子出兵。';}
+  else if(selected!==null&&game.cells[selected].owner===0){const c=game.cells[selected];$('hintTitle').textContent=`${coord(selected)} 已选中 · 可派出 ${game.sent(c,ratio)} 兵力`;$('hintText').textContent='出兵才推进回合；可以慢慢思考，不必抢点。';}
+  else{$('hintTitle').textContent='轮到你了，慢慢规划';$('hintText').textContent='选中己方领土出兵，或蓄兵一回合。';}
   const stats=game.stats(),mine=stats[0],total=game.cells.length;
   stats.forEach((s,id)=>{const row=factionEls[id];row.classList.toggle('dead',s.land===0);row.querySelector('.faction-numbers strong').textContent=s.land;row.querySelector('.faction-numbers>span').textContent=s.land?s.army:'出局';});
   $('aliveCount').textContent=`${stats.filter(s=>s.land).length} 方存活`;
@@ -106,7 +134,7 @@ function render(){
   $('territoryShare').innerHTML=stats.filter(s=>s.land).map(s=>`<i style="width:${s.land/total*100}%;background:${s.color}"></i>`).join('')+`<i style="width:${neutral/total*100}%;background:#46523a"></i>`;
   const logKey=game.events.map(e=>e.text+e.time).join('|');
   if(logKey!==lastLog){lastLog=logKey;$('battleLog').innerHTML=game.events.slice(0,5).map(e=>`<div class="log-item" ${e.owner>=0?`style="border-color:${FACTIONS[e.owner].color}66"`:''}><time>${formatTime(e.time)}</time><p>${e.text}</p></div>`).join('');}
-  renderIntel();
+  renderIntel();renderBattleResult();
 }
 function renderIntel(){
   const id=hovered??selected;if(id===null){$('tileIntel').innerHTML='<div class="intel-placeholder">◇</div><p>选择一块领土<br><span>查看兵力与进攻信息</span></p>';return;}
@@ -118,7 +146,7 @@ function renderIntel(){
   $('tileIntel').innerHTML=`<div class="tile-preview" style="${f?`color:${f.color};border-color:${f.color}77;background:rgba(${f.rgb},.15)`:'background:#2e3d27;border-color:#596d48;color:#a3b68c'}">${c.owner>=0?c.army:'◇'}</div><div class="tile-detail"><div class="coordinate">${coord(id)}<span>${f?f.symbol:''}</span></div><strong>${f?(c.owner===0?'你的领土':f.name+'阵营'):'未占领的土地'}</strong><p class="intel-note">${note}</p></div>`;
 }
 function checkResult(){
-  if(resultShown)return;
+  if(resultShown||game.resolving)return;
   const lost=!game.cells.some(c=>c.owner===0);
   if(game.winner===null&&(!lost||spectating))return;
   resultShown=true;const won=game.winner===0;
@@ -127,13 +155,13 @@ function checkResult(){
   $('resultEyebrow').textContent=won?'TERRITORY CONQUERED':game.winner!==null?'BATTLE COMPLETE':'THE NEXT EXPEDITION AWAITS';
   $('resultTitle').textContent=won?'全境归你':game.winner!==null?`${FACTIONS[game.winner].name}赢得胜利`:'暂别这一片疆土';
   $('resultDesc').textContent=won?'从一格领土，到整片大陆。这一战，你做到了。':game.winner!==null?'全图已被统一。再出发，下一场胜利或许属于你。':'你的领土已全部失守。调整策略，再出发。';
-  $('resultStats').innerHTML=`<div><strong>${formatTime(game.time)}</strong><span>征战时间</span></div><div><strong>${game.captures}</strong><span>累计攻占</span></div><div><strong>${game.moves}</strong><span>出兵次数</span></div>`;
+  $('resultStats').innerHTML=`<div><strong>${game.turn}</strong><span>征战回合</span></div><div><strong>${game.captures}</strong><span>累计攻占</span></div><div><strong>${game.moves}</strong><span>出兵次数</span></div>`;
   $('nextBtn').hidden=!won||config.mode!=='campaign'||config.level===LEVELS.length-1;$('watchBtn').hidden=game.winner!==null;
   $('resultDialog').showModal();tone(won?880:220);
 }
 $('startBtn').onclick=start;$('pauseBtn').onclick=togglePause;$('resumeBtn').onclick=togglePause;
 $('restartBtn').onclick=()=>requestReset(()=>{});
-$('speedBtn').onclick=()=>{speed=speed===1?2:1;$('speedBtn').textContent=`${speed}×`;$('speedBtn').setAttribute('aria-label',`当前 ${speed} 倍速，点击切换`);};
+$('waitBtn').onclick=waitTurn;
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};
 $('campaignTab').onclick=()=>{if(config.mode!=='campaign')requestReset(()=>config.mode='campaign');};
 $('customTab').onclick=()=>{if(config.mode!=='custom')requestReset(()=>config.mode='custom');};
@@ -156,6 +184,7 @@ $('mobileSetup').onclick=()=>{const open=$('setup').classList.toggle('mobile-ope
 document.addEventListener('keydown',e=>{
   if(document.querySelector('dialog[open]')||['SELECT','INPUT','TEXTAREA'].includes(e.target.tagName))return;
   if(e.code==='Space'&&e.target.tagName!=='BUTTON'){e.preventDefault();if(game.running)togglePause();else if(game.time===0)start();}
+  if(e.key.toLowerCase()==='e'&&game.running){e.preventDefault();waitTurn();}
   if(e.key==='Escape'){selected=null;render();}
   if(e.key.startsWith('Arrow')&&selected!==null&&game.running&&!game.paused&&!spectating){
     e.preventDefault();const x=selected%game.w,y=Math.floor(selected/game.w);let to=null;
@@ -167,7 +196,8 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&game.runni
 setupGame();
 function frame(now){
   const dt=Math.min((now-lastFrame)/1000,.1);lastFrame=now;
-  for(let i=0;i<speed;i++)for(const a of game.update(dt))if(a?.ok)flashes.set(a.toId,{until:now+300,captured:a.captured});
+  game.update(dt);
+  advanceResolution(now);
   if(selected!==null&&game.running&&!spectating&&game.cells[selected].owner!==0)selected=null;
   checkResult();renderTimer+=dt;
   if(renderTimer>.1){render();renderTimer=0;}

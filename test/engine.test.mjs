@@ -21,9 +21,9 @@ test('only orthogonal neighbors may be attacked; paused and unstarted games reje
   g.paused=false;g.running=false;assert.equal(g.attack(from,from+1,0).ok,false);
 });
 test('growth is equal for every faction; captured capitals grow as ordinary tiles',()=>{
-  const g=running();g.aiTimers.fill(100);for(let i=0;i<7;i++)g.update(.25);for(const id of g.spawns)assert.equal(g.cells[id].army,23);
-  const captured=g.spawns[1];g.cells[captured].owner=0;const before=g.cells[captured].army;for(let i=0;i<7;i++)g.update(.25);assert.equal(g.cells[captured].army,before+1);
-  g.cells[captured].army=1200;for(let i=0;i<7;i++)g.update(.25);assert.equal(g.cells[captured].army,1200);
+  const g=running();g.aiMove=()=>null;g.waitTurn();for(const id of g.spawns)assert.equal(g.cells[id].army,23);
+  const captured=g.spawns[1];g.cells[captured].owner=0;const before=g.cells[captured].army;g.waitTurn();assert.equal(g.cells[captured].army,before+1);
+  g.cells[captured].army=1200;g.waitTurn();assert.equal(g.cells[captured].army,1200);
 });
 test('victory requires every tile including neutral land',()=>{
   const g=running();g.cells.forEach(c=>{c.owner=0;c.army=4;});g.cells[0].owner=-1;g.cells[0].army=0;g.checkWinner();assert.equal(g.winner,null);
@@ -33,11 +33,72 @@ test('victory requires every tile including neutral land',()=>{
 test('AI expands, fights and routes reinforcements without illegal moves or resurrection',()=>{
   for(const difficulty of ['easy','normal','hard']){
     const g=new Game({w:10,h:8,ai:3,difficulty});g.running=true;
-    for(let i=0;i<2400&&g.winner===null;i++){
-      g.update(.1);if(i%10===0)g.aiMove(0);
+    for(let i=0;i<240&&g.winner===null;i++){
+      g.aiMove(0);g.waitTurn();
       assert.ok(g.cells.every(c=>c.army>=0&&Number.isInteger(c.army)&&c.owner>=-1&&c.owner<=3));
     }
     assert.ok(g.cells.filter(c=>c.owner>=0).length>20);
     g.cells.forEach(c=>{if(c.owner===2)c.owner=1;});assert.equal(g.aiMove(2),null);
   }
+});
+test('thinking for ten minutes never grants AI actions or troop growth on any difficulty',()=>{
+  for(const difficulty of ['easy','normal','hard']){
+    const g=new Game({ai:7,difficulty});g.running=true;const before=JSON.stringify(g.cells);
+    for(let i=0;i<2400;i++)g.update(.25);
+    assert.equal(JSON.stringify(g.cells),before);assert.equal(g.turn,0);assert.equal(g.time,600);
+  }
+});
+test('one player action grants each of seven computers at most one action at every difficulty',()=>{
+  for(const difficulty of ['easy','normal','hard']){
+    const g=new Game({w:18,h:12,ai:7,difficulty});g.running=true;const calls=[],move=g.aiMove.bind(g);
+    g.aiMove=id=>{calls.push(id);return move(id);};
+    const result=g.playTurn(g.spawns[0],g.spawns[0]+1,.5);assert.equal(result.ok,true);assert.equal(g.turn,1);
+    assert.deepEqual([...calls].sort((a,b)=>a-b),[1,2,3,4,5,6,7]);assert.ok(result.actions.length<=8);
+    assert.doesNotThrow(()=>JSON.stringify(result));calls.length=0;g.waitTurn();assert.equal(g.turn,2);assert.equal(calls.length,7);
+  }
+});
+test('invalid moves and pauses do not consume turns or let the AI act',()=>{
+  const g=running(),before=JSON.stringify(g.cells);assert.equal(g.playTurn(g.spawns[0],g.spawns[0]+g.w+1).ok,false);
+  assert.equal(g.turn,0);assert.equal(JSON.stringify(g.cells),before);
+  g.cells[g.spawns[0]].army=1;assert.equal(g.playTurn(g.spawns[0],g.spawns[0]+1).ok,false);assert.equal(g.turn,0);
+  g.paused=true;assert.equal(g.waitTurn().ok,false);assert.equal(g.turn,0);
+});
+test('fast and slow players get the exact same battle from the same decisions',()=>{
+  const fast=running(),slow=running();
+  for(let turn=0;turn<20;turn++){
+    for(let i=0;i<120;i++)slow.update(.25);
+    fast.waitTurn();slow.waitTurn();assert.deepEqual(fast.cells,slow.cells);assert.equal(fast.turn,slow.turn);
+  }
+});
+test('combat losses stay deducted on both player and AI capitals; fighting suppresses growth symmetrically',()=>{
+  for(const owner of [0,1])for(const ratio of [.5,1]){
+    const g=running();g.aiMove=()=>null;
+    Object.assign(g.cells[11],{owner,army:4,capital:owner});
+    Object.assign(g.cells[12],{owner:1-owner,army:100,capital:1-owner});
+    const result=g.attack(11,12,owner,ratio);g.finishTurn([result],{defer:true});
+    const sent=ratio===.5?2:3;
+    assert.equal(g.cells[11].army,4-sent);assert.equal(g.cells[12].army,100-sent);
+    while(g.resolving)g.stepTurn();
+    assert.equal(g.cells[11].army,4-sent);assert.equal(g.cells[12].army,100-sent);
+    g.waitTurn();assert.equal(g.cells[12].army,103-sent);
+  }
+});
+test('AI reinforcements pay their actual source and remain distinct from damage and growth',()=>{
+  const g=running();Object.assign(g.cells[11],{army:4,capital:-1});
+  Object.assign(g.cells[12],{owner:1,army:100,capital:1});Object.assign(g.cells[13],{owner:1,army:6});
+  g.aiMove=owner=>g.attack(13,12,owner,1);
+  const result=g.playTurn(11,12,.5,{defer:true});
+  assert.equal(g.cells[12].army,98);assert.equal(result.toBefore,100);assert.equal(result.toAfter,98);
+  assert.equal(g.waitTurn().ok,false);assert.equal(g.playTurn(11,12).ok,false);
+  const ai=g.stepTurn();assert.equal(ai.action.kind,'reinforce');assert.equal(ai.action.amount,5);
+  assert.equal(g.cells[13].army,1);assert.equal(g.cells[12].army,103);
+  const growth=g.stepTurn();assert.equal(growth.kind,'growth');assert.ok(!growth.changes.some(c=>c.id===12));
+  assert.equal(g.cells[12].army,103);assert.equal(g.resolving,false);
+});
+test('staged turns pause safely, cannot double-submit, and produce the same final result as synchronous turns',()=>{
+  const immediate=running(),staged=running();
+  immediate.playTurn(11,12);staged.playTurn(11,12,.5,{defer:true});
+  assert.equal(staged.resolving,true);staged.paused=true;assert.equal(staged.stepTurn(),null);assert.equal(staged.turn,1);
+  staged.paused=false;while(staged.resolving)staged.stepTurn();
+  assert.deepEqual(staged.cells,immediate.cells);assert.equal(staged.turn,immediate.turn);
 });
