@@ -1,4 +1,4 @@
-import {Game,FACTIONS,LEVELS} from './engine.mjs';
+import {Game,FACTIONS,LEVELS} from './engine.js';
 const $=id=>document.getElementById(id);
 const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 let wins=[];

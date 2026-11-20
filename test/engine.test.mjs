@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Game,LEVELS} from '../dist/engine.mjs';
+import {Game,LEVELS} from '../dist/engine.js';
 function running(){const g=new Game();g.running=true;return g;}
 test('all six levels start every faction with exactly one tile and 20 troops',()=>{
   for(const l of LEVELS){const g=new Game(l);assert.equal(g.cells.length,l.w*l.h);for(const s of g.stats()){assert.equal(s.land,1);assert.equal(s.army,20);}assert.equal(new Set(g.spawns).size,g.ai+1);}

@@ -20,4 +20,6 @@
 
 可暂停、重新开始。关卡通关记录仅保存在当前浏览器，战局不跨刷新保留。键盘方向键出兵，E 蓄兵一回合，空格暂停（焦点位于按钮时遵循按钮原有键盘操作），Esc 取消选中。计时器只统计思考用时，不影响战局。
 
-`dist/engine.mjs` 为独立规则与 AI；`dist/app.mjs` 为界面和游戏循环；`node --test test/engine.test.mjs` 运行规则测试。
+`dist/engine.js` 为独立规则与 AI；`dist/app.js` 为界面和游戏循环；`node --test test/*.mjs` 运行规则与打包测试。
+
+资源包内脚本一律使用 `.js` 扩展名：大厅按固定 MIME 表发放文件，只有 `.js` 映射为 JavaScript，`.mjs` 会被当作二进制下载，模块脚本因严格 MIME 检查而无法启动。
