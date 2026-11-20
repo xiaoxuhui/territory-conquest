@@ -146,3 +146,42 @@ test('AI-only rounds include faction zero and do not grant human control',()=>{
   g.waitTurn();assert.deepEqual(calls,[0,1,2]);assert.equal(g.currentHuman,null);assert.equal(g.turn,1);
   assert.equal(g.moves,0);assert.ok(g.stats().every(s=>!s.human));
 });
+test('zero-human games schedule automatic rounds only after starting and resolve one action per AI',()=>{
+  for(const difficulty of ['easy','normal','hard']){
+    const g=new Game({humans:0,ai:3,difficulty});const calls=[],move=g.aiMove.bind(g);
+    g.aiMove=id=>{calls.push(id);return move(id);};
+    for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,0);assert.equal(g.resolving,false);
+    g.running=true;for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);assert.equal(g.resolving,true);
+    for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,1);assert.deepEqual(calls,[]);
+    while(g.resolving)g.stepTurn();assert.deepEqual(calls,[0,1,2]);assert.ok(g.stats().every(s=>s.land===2));
+    for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,2);
+  }
+});
+test('automatic games freeze while paused and resume without catch-up turns',()=>{
+  const g=new Game({humans:0,ai:2});g.running=true;g.paused=true;
+  const before=JSON.stringify(g.cells);for(let i=0;i<400;i++)g.update(.25);assert.equal(g.turn,0);assert.equal(g.time,0);
+  g.paused=false;for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);g.paused=true;
+  for(let i=0;i<400;i++)g.update(.25);assert.equal(g.stepTurn(),null);assert.equal(JSON.stringify(g.cells),before);assert.equal(g.turn,1);
+  g.paused=false;while(g.resolving)g.stepTurn();assert.equal(g.turn,1);
+});
+test('zero-computer games remain entirely manual with either one or multiple humans',()=>{
+  for(const humans of [1,2,8]){
+    const g=new Game({humans,ai:0});g.running=true;assert.equal(g.automatic,false);
+    const before=JSON.stringify(g.cells);for(let i=0;i<2400;i++)g.update(.25);assert.equal(JSON.stringify(g.cells),before);assert.equal(g.turn,0);
+    g.playTurn(g.spawns[0],g.spawns[0]+1);const after=JSON.stringify(g.cells),turn=g.turn;
+    for(let i=0;i<2400;i++)g.update(.25);assert.equal(JSON.stringify(g.cells),after);assert.equal(g.turn,turn);
+  }
+});
+test('a complete automatic solo-AI game reaches conquest and stops advancing after victory',()=>{
+  const g=new Game({w:4,h:4,humans:0,ai:1});g.running=true;
+  for(let i=0;i<4000&&g.winner===null;i++){g.update(.25);while(g.resolving)g.stepTurn();}
+  assert.equal(g.winner,0);assert.equal(g.running,false);assert.ok(g.cells.every(c=>c.owner===0));
+  const turn=g.turn,before=JSON.stringify(g.cells);for(let i=0;i<40;i++)g.update(.25);
+  assert.equal(g.turn,turn);assert.equal(JSON.stringify(g.cells),before);
+});
+test('automatic observation starts only after the final human is eliminated',()=>{
+  const g=new Game({humans:2,ai:1});g.running=true;
+  g.cells.forEach(c=>{if(c.owner===0)c.owner=2;});assert.equal(g.automatic,false);
+  g.cells.forEach(c=>{if(c.owner===1)c.owner=2;});assert.equal(g.automatic,true);
+  for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);assert.equal(g.resolving,true);
+});
