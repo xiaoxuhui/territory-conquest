@@ -18,8 +18,8 @@ export const LEVELS = [
 ];
 export const UNREST_LIMIT=4,UNREST_WINDOW=8,SECESSION_GRACE=12;
 export const ATTITUDES=['和平','中立','敌对'];
-export const NEUTRAL_ATTACK_CHANCE=.1;
-export const DIPLOMACY_IMPROVE_CHANCE=.1,SECESSION_ARMY_MULTIPLIER=10;
+export const NEUTRAL_ATTACK_CHANCE=.01;
+export const DIPLOMACY_IMPROVE_CHANCE=.01,SECESSION_ARMY_MULTIPLIER=10;
 function newCountry(id,number){
   const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
   const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});

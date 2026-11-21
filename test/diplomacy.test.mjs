@@ -87,9 +87,9 @@ test('all starting countries are neutral in each direction and players can decid
   const g=new Game({ai:7});for(let a=0;a<8;a++)for(let b=0;b<8;b++)assert.equal(g.attitude(a,b),a===b?0:1);
   const human=running();Object.assign(human.cells[12],{owner:1,army:100});assert.equal(human.playTurn(11,12).ok,true);assert.equal(human.attitude(1,0),2);assert.equal(human.attitude(0,1),1);
 });
-test('neutral computer initiative has an exact ten-percent boundary and cannot reroll within one round',()=>{
-  assert.equal(NEUTRAL_ATTACK_CHANCE,.1);
-  for(const [value,expected] of [[0,true],[.099999,true],[.1,false],[.999,false]]){
+test('neutral computer initiative has an exact one-percent boundary and cannot reroll within one round',()=>{
+  assert.equal(NEUTRAL_ATTACK_CHANCE,.01);
+  for(const [value,expected] of [[0,true],[.009999,true],[.01,false],[.099999,false],[.999,false]]){
     const g=new Game({humans:0,ai:2});g.turn=1;let draws=0;g.rng=()=>{draws++;return value;};
     g.prepareNeutralInitiative(0);assert.equal(g.canAttack(0,1),expected);assert.equal(draws,1);
     for(let i=0;i<20;i++){g.prepareNeutralInitiative(0);g.canAttack(0,1);}assert.equal(draws,1);
@@ -98,7 +98,7 @@ test('neutral computer initiative has an exact ten-percent boundary and cannot r
   }
 });
 test('neutral initiative controls actual AI attacks while retaliation and hostility need no chance roll',()=>{
-  for(const [value,expected] of [[.05,true],[.5,false]]){
+  for(const [value,expected] of [[.005,true],[.05,false],[.5,false]]){
     const g=new Game({w:4,h:4,humans:0,ai:2});g.running=true;g.rng=()=>value;
     g.cells.forEach(c=>Object.assign(c,{owner:1,army:1,capital:-1}));Object.assign(g.cells[5],{owner:0,army:100});
     const result=g.aiMove(0);assert.equal(!!result?.captured,expected);
