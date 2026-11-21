@@ -5,13 +5,31 @@ let wins=[];
 try{const saved=JSON.parse(localStorage.getItem('territory-wins')||'[]');if(Array.isArray(saved))wins=saved.filter(n=>Number.isInteger(n)&&n>=0&&n<6);}catch{}
 let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:10,h:10,observerMode:'continuous',observerSpeed:1};
 let game,selected=null,hovered=null,ratio=.5,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
-let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0,playbackTime=0;
+let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0,playbackTime=0,mapView='fit';
 const flashes=new Map();
 function factionColumn(f,id){
   const el=document.createElement('div');el.className='faction-column';el.dataset.factionId=id;el.setAttribute('role','listitem');el.style.setProperty('--faction',f.color);
   el.innerHTML=`<div class="faction-bar-track"><div class="faction-bar"><strong class="faction-bar-value">1</strong></div></div><span class="faction-bar-name">${f.name}</span><span class="faction-bar-controller">${game.isHuman(id)?'P'+(id+1):f.rebel?'新国 · 电脑':'电脑'}</span>`;return el;
 }
 function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
+function updateMapView(){
+  const area=$('board').closest('.map-area'),large=game.w>20||game.h>20,fitted=large&&mapView==='fit';
+  $('mapViewControls').hidden=!large;area.classList.toggle('fit-map',fitted);
+  if(large){
+    const css=getComputedStyle(area),px=name=>parseFloat(css[name])||0;
+    const width=Math.max(40,area.clientWidth-px('paddingLeft')-px('paddingRight')-34);
+    const availableHeight=innerHeight-Math.max(0,area.getBoundingClientRect().top)-px('paddingTop')-24-35;
+    const height=Math.max(40,Math.min(Math.min(innerHeight*.6,640)-px('paddingTop')-px('paddingBottom')-24,availableHeight));
+    const cell=Math.min(width/game.w,height/game.h);
+    area.style.setProperty('--fit-width',Math.floor(cell*game.w)+'px');area.style.setProperty('--fit-height',Math.floor(cell*game.h)+'px');
+    area.classList.toggle('tiny-cells',fitted&&cell<14);
+  }else area.classList.remove('tiny-cells');
+  $('fitMapBtn').setAttribute('aria-pressed',mapView==='fit');$('zoomMapBtn').setAttribute('aria-pressed',mapView==='detail');
+}
+function setMapView(view){
+  mapView=view;const area=$('board').closest('.map-area');area.scrollTop=0;area.scrollLeft=0;updateMapView();
+  if(view==='detail'&&selected!==null)tiles[selected].scrollIntoView({block:'nearest',inline:'nearest'});
+}
 function setupGame(){
   game=new Game(currentOptions());selected=null;hovered=null;spectating=game.humans===0;lastController=game.currentHuman;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;playbackTime=0;
   $('diplomacyFrom').replaceChildren();
@@ -22,7 +40,7 @@ function setupGame(){
   $('modeLabel').textContent=config.mode==='campaign'?'关卡挑战':'自定义对战';
   $('mapInfo').textContent=`${game.w} × ${game.h} 平原`;$('factionInfo').textContent=`${game.humans} 人类 · ${game.ai} 电脑`;
   $('board').style.setProperty('--cols',game.w);$('board').style.setProperty('--rows',game.h);
-  const mapArea=$('board').closest('.map-area');mapArea.classList.toggle('large-map',game.w>20||game.h>20);mapArea.style.setProperty('--cols',game.w);mapArea.style.setProperty('--rows',game.h);mapArea.scrollTop=0;mapArea.scrollLeft=0;
+  mapView='fit';const mapArea=$('board').closest('.map-area');mapArea.classList.toggle('large-map',game.w>20||game.h>20);mapArea.style.setProperty('--cols',game.w);mapArea.style.setProperty('--rows',game.h);mapArea.scrollTop=0;mapArea.scrollLeft=0;
   $('colCoords').style.setProperty('--cols',game.w);$('rowCoords').style.setProperty('--rows',game.h);
   $('colCoords').innerHTML=Array.from({length:game.w},(_,x)=>`<span>${columnLabel(x)}</span>`).join('');
   $('rowCoords').innerHTML=Array.from({length:game.h},(_,y)=>`<span>${String(y+1).padStart(2,'0')}</span>`).join('');
@@ -32,7 +50,7 @@ function setupGame(){
     el.addEventListener('click',()=>clickTile(c.id));el.addEventListener('mouseenter',()=>{hovered=c.id;renderIntel();});el.addEventListener('mouseleave',()=>{hovered=null;renderIntel();});el.addEventListener('focus',()=>{hovered=c.id;renderIntel();});el.addEventListener('blur',()=>{hovered=null;renderIntel();});
     frag.append(el);return el;
   });$('board').replaceChildren(frag);
-  factionEls=game.factions.map(factionColumn);$('factionList').replaceChildren(...factionEls);renderSettings();render();
+  factionEls=game.factions.map(factionColumn);$('factionList').replaceChildren(...factionEls);renderSettings();render();updateMapView();
 }
 function renderSettings(){
   $('campaignTab').classList.toggle('active',config.mode==='campaign');$('campaignTab').setAttribute('aria-selected',config.mode==='campaign');
@@ -252,6 +270,10 @@ $('restartBtn').onclick=()=>requestReset(()=>{});
 $('waitBtn').onclick=waitTurn;
 $('moveCapitalBtn').onclick=moveCapital;
 $('buildCapitalBtn').onclick=buildCapital;
+$('fitMapBtn').onclick=()=>setMapView('fit');$('zoomMapBtn').onclick=()=>setMapView('detail');
+window.addEventListener('resize',updateMapView);
+let observedMapWidth=0;
+new ResizeObserver(entries=>{const width=entries[0].contentRect.width;if(width!==observedMapWidth){observedMapWidth=width;requestAnimationFrame(updateMapView);}}).observe($('board').closest('.map-area'));
 $('diplomacyFrom').onchange=()=>renderDiplomacy();
 $('diplomacyList').onclick=e=>{const button=e.target.closest('[data-declare-war]');if(button&&!button.disabled)declareWar(Number(button.dataset.declareWar));};
 $('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};

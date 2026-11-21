@@ -32,7 +32,7 @@
       <div id="campaignSettings"><div class="field-heading"><span>选择关卡</span><span class="subtle" id="completedLabel">0 / 6 完成</span></div><div id="levelList" class="level-list"></div></div>
       <div id="customSettings" hidden>
         <label class="field-heading" for="mapSize">地图大小</label><select id="mapSize"><option value="10,10" selected>小型平原 · 10 × 10</option><option value="30,30">中型大陆 · 30 × 30</option><option value="100,100">广袤世界 · 100 × 100</option></select>
-        <p class="small-note">大地图可在地图内横向、纵向滚动查看。</p>
+        <p class="small-note">大地图默认缩小显示全图，可切换「放大操作」看清兵力。</p>
         <div class="field-heading"><span>人类玩家</span><span class="subtle">0–8 位</span></div><div class="stepper"><button id="minusHuman" aria-label="减少人类玩家">−</button><span><strong id="humanCount">1</strong> 位人类</span><button id="plusHuman" aria-label="增加人类玩家">+</button></div>
         <div class="field-heading"><span>电脑玩家</span><span class="subtle">0–8 位</span></div><div class="stepper"><button id="minusAI" aria-label="减少电脑对手">−</button><span><strong id="aiCount">3</strong> 位电脑</span><button id="plusAI" aria-label="增加电脑对手">+</button></div><p id="playerSetupNote" class="small-note">人类与电脑合计 1–8 位，所有阵营从一块领土和 20 兵力开始。</p>
       </div>
@@ -44,6 +44,7 @@
       <div class="battle-heading"><div><div class="eyebrow">领土争夺 <span class="slash">/</span> <span id="modeLabel">关卡挑战</span></div><h1 id="mapTitle">初始之地<span>01</span></h1><p id="mapSubtitle">一场属于你的征途</p></div><button id="mobileSetup" class="icon-btn" aria-label="对战设置"><svg><use href="#i-settings"/></svg></button><div class="battle-meta"><span class="state" id="gameState">准备就绪</span><span class="clock"><svg><use href="#i-clock"/></svg><span id="timer">00:00</span></span></div></div>
       <div class="map-shell">
         <div class="map-toolbar"><div class="map-spec"><span class="tiny-grid">▦</span><span id="mapInfo">10 × 8 平原</span><span class="toolbar-dot">·</span><span id="factionInfo">2 个阵营</span></div><div class="map-actions"><span id="turnLabel" class="turn-label">第 0 回合</span><button id="pauseBtn" class="icon-btn" aria-label="暂停游戏" disabled><svg><use href="#i-pause"/></svg></button><button id="restartBtn" class="icon-btn" aria-label="重新开始"><svg><use href="#i-reset"/></svg></button></div></div>
+        <div id="mapViewControls" class="map-view-controls" role="group" aria-label="地图显示方式" hidden><button id="fitMapBtn" class="secondary map-view-btn" aria-pressed="true">全图</button><button id="zoomMapBtn" class="secondary map-view-btn" aria-pressed="false">放大操作</button><span>全图看版图，放大看兵力</span></div>
         <div class="map-area"><div id="colCoords" class="col-coords"></div><div class="grid-row"><div id="rowCoords" class="row-coords"></div><div id="board" class="board" role="group" aria-label="领土地图"></div></div><div class="board-compass"><span>N</span><span>✧</span></div>
           <div id="pauseOverlay" class="map-overlay" hidden><div><svg><use href="#i-pause"/></svg><h2>战局已暂停</h2><p>整顿思路，下一步由你决定。</p><button id="resumeBtn" class="primary">继续战斗</button></div></div>
         </div>
