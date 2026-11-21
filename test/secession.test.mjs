@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Game,FACTIONS,UNREST_LIMIT,UNREST_WINDOW,SECESSION_GRACE} from '../dist/engine.js';
-function running(options={}){const g=new Game(options);g.running=true;g.aiMove=()=>null;return g;}
+function running(options={}){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.running=true;g.aiMove=()=>null;return g;}
 function flip(g){
   const target=g.cells[12],owner=1-target.owner,source=g.cells[owner===0?11:13];
   Object.assign(source,{owner,army:100});target.army=1;

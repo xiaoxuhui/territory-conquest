@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Game,LEVELS} from '../dist/engine.js';
-function running(){const g=new Game();g.running=true;return g;}
+// Combat fixtures explicitly begin at war; default peaceful behavior is tested separately.
+function warGame(options){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));return g;}
+function running(){const g=warGame();g.running=true;return g;}
 test('all six levels start every faction with exactly one tile and 20 troops',()=>{
-  for(const l of LEVELS){const g=new Game(l);assert.equal(g.cells.length,l.w*l.h);for(const s of g.stats()){assert.equal(s.land,1);assert.equal(s.army,20);}assert.equal(new Set(g.spawns).size,g.ai+1);}
-  for(let ai=1;ai<=7;ai++){const g=new Game({w:10,h:8,ai});assert.equal(g.stats().length,ai+1);assert.ok(g.stats().every(s=>s.land===1&&s.army===20));}
+  for(const l of LEVELS){const g=warGame(l);assert.equal(g.cells.length,l.w*l.h);for(const s of g.stats()){assert.equal(s.land,1);assert.equal(s.army,20);}assert.equal(new Set(g.spawns).size,g.ai+1);}
+  for(let ai=1;ai<=7;ai++){const g=warGame({w:10,h:8,ai});assert.equal(g.stats().length,ai+1);assert.ok(g.stats().every(s=>s.land===1&&s.army===20));}
 });
 test('click attack captures neutral, leaves a garrison, and supports friendly transfer',()=>{
   const g=running(),from=g.spawns[0],to=g.neighbors(from)[0];
@@ -32,7 +34,7 @@ test('victory requires every tile including neutral land',()=>{
 });
 test('AI expands, fights and routes reinforcements without illegal moves or resurrection',()=>{
   for(const difficulty of ['easy','normal','hard']){
-    const g=new Game({w:10,h:8,ai:3,difficulty});g.running=true;
+    const g=warGame({w:10,h:8,ai:3,difficulty});g.running=true;
     for(let i=0;i<240&&g.winner===null;i++){
       g.aiMove(0);g.waitTurn();
       assert.ok(g.cells.every(c=>c.army>=0&&Number.isInteger(c.army)&&c.owner>=-1&&c.owner<g.players));
@@ -43,14 +45,14 @@ test('AI expands, fights and routes reinforcements without illegal moves or resu
 });
 test('thinking for ten minutes never grants AI actions or troop growth on any difficulty',()=>{
   for(const difficulty of ['easy','normal','hard']){
-    const g=new Game({ai:7,difficulty});g.running=true;const before=JSON.stringify(g.cells);
+    const g=warGame({ai:7,difficulty});g.running=true;const before=JSON.stringify(g.cells);
     for(let i=0;i<2400;i++)g.update(.25);
     assert.equal(JSON.stringify(g.cells),before);assert.equal(g.turn,0);assert.equal(g.time,600);
   }
 });
 test('one player action grants each of seven computers at most one action at every difficulty',()=>{
   for(const difficulty of ['easy','normal','hard']){
-    const g=new Game({w:18,h:12,ai:7,difficulty});g.running=true;const calls=[],move=g.aiMove.bind(g);
+    const g=warGame({w:18,h:12,ai:7,difficulty});g.running=true;const calls=[],move=g.aiMove.bind(g);
     g.aiMove=id=>{calls.push(id);return move(id);};
     const result=g.playTurn(g.spawns[0],g.spawns[0]+1,.5);assert.equal(result.ok,true);assert.equal(g.turn,1);
     assert.deepEqual([...calls].sort((a,b)=>a-b),[1,2,3,4,5,6,7]);assert.ok(result.actions.length<=8);
@@ -104,20 +106,20 @@ test('staged turns pause safely, cannot double-submit, and produce the same fina
 });
 test('zero computers, eight local humans, and AI-only games share equal one-tile starts',()=>{
   for(const [humans,ai] of [[1,0],[2,0],[8,0],[0,8],[0,1],[3,5]]){
-    const g=new Game({humans,ai});assert.equal(g.players,humans+ai);assert.equal(g.stats().length,humans+ai);
+    const g=warGame({humans,ai});assert.equal(g.players,humans+ai);assert.equal(g.stats().length,humans+ai);
     assert.ok(g.stats().every(s=>s.land===1&&s.army===20));assert.equal(g.stats().filter(s=>s.human).length,humans);
     assert.equal(g.currentHuman,humans?0:null);
   }
-  for(const options of [{humans:0,ai:0},{humans:8,ai:1},{humans:-1,ai:2},{humans:1,ai:-1},{humans:1.5,ai:1}])assert.throws(()=>new Game(options));
+  for(const options of [{humans:0,ai:0},{humans:8,ai:1},{humans:-1,ai:2},{humans:1,ai:-1},{humans:1.5,ai:1}])assert.throws(()=>warGame(options));
 });
 test('a solo human with no AI does not win until the full map is occupied',()=>{
-  const g=new Game({ai:0});g.running=true;assert.equal(g.winner,null);
+  const g=warGame({ai:0});g.running=true;assert.equal(g.winner,null);
   assert.equal(g.playTurn(11,12).ok,true);assert.equal(g.turn,1);assert.equal(g.currentHuman,0);
   assert.equal(g.cells[11].army,13);assert.equal(g.cells[12].army,11);assert.equal(g.winner,null);
   assert.equal(g.waitTurn().ok,true);assert.equal(g.turn,2);assert.equal(g.currentHuman,0);
 });
 test('two local humans control different factions and grow only after both act',()=>{
-  const g=new Game({humans:2,ai:0});g.running=true;
+  const g=warGame({humans:2,ai:0});g.running=true;
   g.playTurn(11,12);assert.equal(g.currentHuman,1);assert.equal(g.turn,1);assert.equal(g.resolving,false);
   assert.equal(g.cells[11].army,10);assert.equal(g.cells[g.spawns[1]].army,20);
   assert.equal(g.playTurn(11,21).ok,false);assert.equal(g.currentHuman,1);
@@ -126,21 +128,21 @@ test('two local humans control different factions and grow only after both act',
   assert.equal(g.cells[11].army,13);assert.equal(g.cells[p2].army,13);
 });
 test('computers act once per full human round and their ids start after all humans',()=>{
-  const g=new Game({humans:3,ai:2});g.running=true;const calls=[];g.aiMove=id=>{calls.push(id);return null;};
+  const g=warGame({humans:3,ai:2});g.running=true;const calls=[];g.aiMove=id=>{calls.push(id);return null;};
   g.waitTurn();assert.equal(g.currentHuman,1);assert.deepEqual(calls,[]);
   g.waitTurn();assert.equal(g.currentHuman,2);assert.deepEqual(calls,[]);
   g.waitTurn();assert.equal(g.currentHuman,0);assert.deepEqual(calls,[3,4]);assert.equal(g.turn,1);
   assert.ok(g.stats().every(s=>s.army===23));
 });
 test('eliminated human players are skipped while other local humans can still play',()=>{
-  const g=new Game({humans:3,ai:0});g.running=true;
+  const g=warGame({humans:3,ai:0});g.running=true;
   Object.assign(g.cells[g.spawns[1]],{owner:-1,army:0,capital:-1});
   Object.assign(g.cells[11],{owner:0,army:30});Object.assign(g.cells[12],{owner:1,army:1,capital:1});
   g.playTurn(11,12);assert.deepEqual(g.aliveHumans(),[0,2]);assert.equal(g.currentHuman,2);
   g.waitTurn();assert.equal(g.currentHuman,0);assert.equal(g.winner,null);
 });
 test('AI-only rounds include faction zero and do not grant human control',()=>{
-  const g=new Game({humans:0,ai:3});g.running=true;const calls=[],move=g.aiMove.bind(g);
+  const g=warGame({humans:0,ai:3});g.running=true;const calls=[],move=g.aiMove.bind(g);
   g.aiMove=id=>{calls.push(id);return move(id);};
   assert.equal(g.playTurn(g.spawns[0],g.spawns[0]+1).ok,false);
   g.waitTurn();assert.deepEqual(calls,[0,1,2]);assert.equal(g.currentHuman,null);assert.equal(g.turn,1);
@@ -148,7 +150,7 @@ test('AI-only rounds include faction zero and do not grant human control',()=>{
 });
 test('zero-human games schedule automatic rounds only after starting and resolve one action per AI',()=>{
   for(const difficulty of ['easy','normal','hard']){
-    const g=new Game({humans:0,ai:3,difficulty});const calls=[],move=g.aiMove.bind(g);
+    const g=warGame({humans:0,ai:3,difficulty});const calls=[],move=g.aiMove.bind(g);
     g.aiMove=id=>{calls.push(id);return move(id);};
     for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,0);assert.equal(g.resolving,false);
     g.running=true;for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);assert.equal(g.resolving,true);
@@ -158,7 +160,7 @@ test('zero-human games schedule automatic rounds only after starting and resolve
   }
 });
 test('automatic games freeze while paused and resume without catch-up turns',()=>{
-  const g=new Game({humans:0,ai:2});g.running=true;g.paused=true;
+  const g=warGame({humans:0,ai:2});g.running=true;g.paused=true;
   const before=JSON.stringify(g.cells);for(let i=0;i<400;i++)g.update(.25);assert.equal(g.turn,0);assert.equal(g.time,0);
   g.paused=false;for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);g.paused=true;
   for(let i=0;i<400;i++)g.update(.25);assert.equal(g.stepTurn(),null);assert.equal(JSON.stringify(g.cells),before);assert.equal(g.turn,1);
@@ -166,27 +168,27 @@ test('automatic games freeze while paused and resume without catch-up turns',()=
 });
 test('zero-computer games remain entirely manual with either one or multiple humans',()=>{
   for(const humans of [1,2,8]){
-    const g=new Game({humans,ai:0});g.running=true;assert.equal(g.automatic,false);
+    const g=warGame({humans,ai:0});g.running=true;assert.equal(g.automatic,false);
     const before=JSON.stringify(g.cells);for(let i=0;i<2400;i++)g.update(.25);assert.equal(JSON.stringify(g.cells),before);assert.equal(g.turn,0);
     g.playTurn(g.spawns[0],g.spawns[0]+1);const after=JSON.stringify(g.cells),turn=g.turn;
     for(let i=0;i<2400;i++)g.update(.25);assert.equal(JSON.stringify(g.cells),after);assert.equal(g.turn,turn);
   }
 });
 test('a complete automatic solo-AI game reaches conquest and stops advancing after victory',()=>{
-  const g=new Game({w:4,h:4,humans:0,ai:1});g.running=true;
+  const g=warGame({w:4,h:4,humans:0,ai:1});g.running=true;
   for(let i=0;i<4000&&g.winner===null;i++){g.update(.25);while(g.resolving)g.stepTurn();}
   assert.equal(g.winner,0);assert.equal(g.running,false);assert.ok(g.cells.every(c=>c.owner===0));
   const turn=g.turn,before=JSON.stringify(g.cells);for(let i=0;i<40;i++)g.update(.25);
   assert.equal(g.turn,turn);assert.equal(JSON.stringify(g.cells),before);
 });
 test('automatic observation starts only after the final human is eliminated',()=>{
-  const g=new Game({humans:2,ai:1});g.running=true;
+  const g=warGame({humans:2,ai:1});g.running=true;
   g.cells.forEach(c=>{if(c.owner===0)c.owner=2;});assert.equal(g.automatic,false);
   g.cells.forEach(c=>{if(c.owner===1)c.owner=2;});assert.equal(g.automatic,true);
   for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);assert.equal(g.resolving,true);
 });
 test('step observation waits indefinitely and advances exactly one full computer round per command',()=>{
-  const g=new Game({humans:0,ai:3,observerMode:'step'});g.running=true;
+  const g=warGame({humans:0,ai:3,observerMode:'step'});g.running=true;
   const before=JSON.stringify(g.cells);for(let i=0;i<2400;i++)g.update(.25);
   assert.equal(g.automatic,true);assert.equal(g.continuous,false);assert.equal(g.turn,0);assert.equal(JSON.stringify(g.cells),before);
   g.waitTurn({defer:true});assert.equal(g.turn,1);assert.equal(g.resolving,true);
@@ -195,7 +197,7 @@ test('step observation waits indefinitely and advances exactly one full computer
   assert.equal(g.turn,1);assert.equal(JSON.stringify(g.cells),after);
 });
 test('switching a continuous computer game to step finishes its current round and stops',()=>{
-  const g=new Game({humans:0,ai:3});g.running=true;
+  const g=warGame({humans:0,ai:3});g.running=true;
   for(let i=0;i<4;i++)g.update(.25);g.stepTurn();const round=g.turn;
   g.setObserverMode('step');assert.equal(g.resolving,true);while(g.resolving)g.stepTurn();
   const after=JSON.stringify(g.cells);for(let i=0;i<40;i++)g.update(.25);
@@ -204,30 +206,30 @@ test('switching a continuous computer game to step finishes its current round an
   for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,round+1);
 });
 test('observation switches reset timing, respect pause and never automate live human players',()=>{
-  const g=new Game({humans:0,ai:1});g.running=true;g.update(.25);g.update(.25);
+  const g=warGame({humans:0,ai:1});g.running=true;g.update(.25);g.update(.25);
   g.setObserverMode('step');g.setObserverMode('continuous');assert.equal(g.automaticElapsed,0);
   g.paused=true;for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,0);
   g.setObserverMode('step');g.paused=false;for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,0);
-  assert.throws(()=>g.setObserverMode('invalid'));assert.throws(()=>new Game({observerMode:'invalid'}));
+  assert.throws(()=>g.setObserverMode('invalid'));assert.throws(()=>warGame({observerMode:'invalid'}));
   for(const ai of [0,2])for(const mode of ['step','continuous']){
-    const human=new Game({humans:1,ai,observerMode:mode});human.running=true;
+    const human=warGame({humans:1,ai,observerMode:mode});human.running=true;
     for(let i=0;i<100;i++)human.update(.25);assert.equal(human.turn,0);assert.equal(human.continuous,false);
   }
 });
 test('AI claims the final neutral tile instead of endlessly shuffling interior armies',()=>{
-  const g=new Game({humans:0,ai:1});g.running=true;
+  const g=warGame({humans:0,ai:1});g.running=true;
   g.cells.forEach(c=>Object.assign(c,{owner:0,army:999,capital:-1}));
   Object.assign(g.cells[79],{owner:-1,army:0});
   const action=g.aiMove(0);assert.equal(action.toId,79);assert.equal(action.captured,true);assert.equal(g.winner,0);
 });
-test('AI expands into a reachable blank before opportunistically taking a weak enemy tile',()=>{
-  const g=new Game({w:6,h:6,humans:0,ai:2});g.running=true;
+test('AI expands into a reachable blank beside a nonaggressive neutral country',()=>{
+  const g=warGame({w:6,h:6,humans:0,ai:2});g.running=true;
   g.cells.forEach(c=>Object.assign(c,{owner:1,army:50,capital:-1}));
-  Object.assign(g.cells[7],{owner:0,army:100});Object.assign(g.cells[8],{owner:-1,army:0});g.cells[6].army=1;
+  Object.assign(g.cells[7],{owner:0,army:100});Object.assign(g.cells[8],{owner:-1,army:0});g.cells[6].army=1;g.relations[0][1]=1;
   const action=g.aiMove(0);assert.equal(action.toId,8);assert.equal(action.oldOwner,-1);assert.equal(action.amount,50);
 });
 test('AI routes an interior army toward one rally point without sending it back',()=>{
-  const g=new Game({w:5,h:4,humans:0,ai:2});g.running=true;
+  const g=warGame({w:5,h:4,humans:0,ai:2});g.running=true;
   g.cells.forEach(c=>Object.assign(c,{owner:1,army:1000,capital:-1}));
   for(const id of [10,11,12,13])Object.assign(g.cells[id],{owner:0,army:1});g.cells[10].army=100;g.cells[13].army=4;g.cells[14].army=50;
   g.aiPlans[0]={rally:13,target:14,age:0};
@@ -236,7 +238,7 @@ test('AI routes an interior army toward one rally point without sending it back'
   }
 });
 test('AI waits for enough support to survive a counterattack and uses half when sufficient',()=>{
-  const g=new Game({w:4,h:4,humans:0,ai:2});g.running=true;
+  const g=warGame({w:4,h:4,humans:0,ai:2});g.running=true;
   g.cells.forEach(c=>Object.assign(c,{owner:0,army:1,capital:-1}));
   Object.assign(g.cells[13],{owner:0,army:4});Object.assign(g.cells[14],{owner:1,army:5});Object.assign(g.cells[15],{owner:1,army:3});
   g.aiPlans[0]={rally:13,target:14,age:0};assert.equal(g.aiMove(0),null);assert.equal(g.cells[14].army,5);
@@ -244,9 +246,10 @@ test('AI waits for enough support to survive a counterattack and uses half when 
 });
 test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
   for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
-    const g=new Game({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
-    // Keep a bounded full-conquest regression for the previously stuck seeds.
-    while(g.winner===null&&g.turn<8000)g.waitTurn();
+    const g=warGame({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
+    // This scenario keeps all new states at war. Hostile-front priority now
+    // finishes the largest reproduced normal seed in 11833 rounds.
+    while(g.winner===null&&g.turn<12000){g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.waitTurn();}
     assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
     assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);
   }
@@ -266,7 +269,7 @@ test('capital migration rejects neutral, enemy, current capital, paused and unst
   g.paused=false;g.running=false;assert.equal(g.moveCapital(12).ok,false);assert.equal(g.turn,0);
 });
 test('recapturing a destroyed capital does not restore it without an explicit construction action',()=>{
-  const g=new Game({humans:2,ai:0});g.running=true;
+  const g=warGame({humans:2,ai:0});g.running=true;
   Object.assign(g.cells[10],{owner:1,army:10});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:100});
   assert.equal(g.attack(10,11,1,1).captured,true);assert.equal(g.capitalLost[0],true);assert.equal(g.cells[11].capital,-1);
   assert.equal(g.attack(12,11,0,1).captured,true);assert.equal(g.isCapital(g.cells[11]),false);
@@ -286,7 +289,7 @@ test('failed and equal-strength attacks do not destroy a capital',()=>{
   assert.equal(g.cells[11].owner,0);assert.equal(g.cells[11].army,0);assert.equal(g.capitalLost[0],false);assert.equal(g.isCapital(g.cells[11]),true);
 });
 test('each human moves only their own capital and hands the action to the next player',()=>{
-  const g=new Game({humans:2,ai:0});g.running=true;Object.assign(g.cells[12],{owner:0,army:4});
+  const g=warGame({humans:2,ai:0});g.running=true;Object.assign(g.cells[12],{owner:0,army:4});
   assert.equal(g.moveCapital(12).ok,true);assert.equal(g.currentHuman,1);assert.equal(g.moveCapital(11).ok,false);
   const second=g.spawns[1],target=g.neighbors(second).find(id=>g.cells[id].owner===-1);Object.assign(g.cells[target],{owner:1,army:4});
   assert.equal(g.moveCapital(target).ok,true);assert.equal(g.currentHuman,0);assert.equal(g.cells[second].capital,-1);assert.equal(g.cells[target].capital,1);
@@ -344,12 +347,12 @@ test('migration moves only the chosen capital and rejects invalid source cities'
   assert.deepEqual(g.capitals(0).map(c=>c.id),[11,13]);assert.equal(g.cells[12].army,13);assert.equal(g.cells[13].army,9);
 });
 test('a second capital hands control to the next human without an extra action',()=>{
-  const g=new Game({humans:2,ai:0});g.running=true;Object.assign(g.cells[12],{owner:0,army:10});
+  const g=warGame({humans:2,ai:0});g.running=true;Object.assign(g.cells[12],{owner:0,army:10});
   assert.equal(g.buildCapital(12).ok,true);assert.equal(g.currentHuman,1);assert.equal(g.capitals(0).length,2);
   assert.equal(g.buildCapital(13).ok,false);assert.equal(g.currentHuman,1);g.waitTurn();assert.equal(g.currentHuman,0);assert.equal(g.turn,1);
 });
 test('computer construction of a second capital uses its one action and preserves land',()=>{
-  const g=new Game({w:6,h:4});g.running=true;g.cells.forEach(c=>Object.assign(c,{owner:1,army:10,capital:-1}));
+  const g=warGame({w:6,h:4});g.running=true;g.cells.forEach(c=>Object.assign(c,{owner:1,army:10,capital:-1}));
   Object.assign(g.cells[23],{owner:0,capital:0});g.cells[7].capital=1;
   const land=g.stats()[1].land,result=g.waitTurn();assert.equal(result.actions.length,1);assert.equal(result.actions[0].kind,'capital-build');
   assert.equal(g.stats()[1].land,land);assert.equal(g.capitals(1).length,2);assert.equal(g.isCapital(g.cells[7]),true);

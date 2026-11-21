@@ -18,6 +18,7 @@ export const LEVELS = [
 ];
 export const UNREST_LIMIT=4,UNREST_WINDOW=8,SECESSION_GRACE=12;
 export const ATTITUDES=['和平','中立','敌对'];
+export const NEUTRAL_ATTACK_CHANCE=.1;
 function newCountry(id,number){
   const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
   const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});
@@ -30,7 +31,9 @@ export class Game {
     if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(humans)||humans<0||!Number.isInteger(ai)||ai<0||players<1||players>8||players>(w-2)*(h-2)) throw new Error('人类与电脑合计需为 1–8 位，且地图必须能容纳所有玩家');
     this.w=w;this.h=h;this.humans=humans;this.ai=ai;this.players=players;this.currentHuman=humans?0:null;this.difficulty=difficulty;this.rng=seededRandom(seed);
     this.factions=FACTIONS.slice(0,players);this.secessions=0;
-    this.relations=Array.from({length:players},()=>Array(players).fill(0));
+    this.relations=Array.from({length:players},(_,owner)=>Array.from({length:players},(_,other)=>owner===other?0:1));
+    this.attackedBy=Array.from({length:players},()=>Array(players).fill(false));
+    this.neutralInitiative=Array(players).fill(null);
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,homeland:-1,army:0,capital:-1,unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
     const places=[this.w+1];
@@ -61,11 +64,26 @@ export class Game {
   }
   stats(){return this.factions.map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
   attitude(from,to){return this.relations[from]?.[to]??0;}
+  canAttack(from,to){return to<0||from===to||this.attitude(from,to)===2||(this.attitude(from,to)===1&&(this.isHuman(from)||this.attackedBy[from]?.[to]===true||(this.neutralInitiative[from]?.turn===this.turn&&this.neutralInitiative[from].allowed)));}
+  prepareNeutralInitiative(owner){
+    if(this.neutralInitiative[owner]?.turn!==this.turn)this.neutralInitiative[owner]={turn:this.turn,allowed:this.rng()<NEUTRAL_ATTACK_CHANCE};
+  }
   reactToAttack(attacker,defender){
+    this.attackedBy[defender][attacker]=true;
     const before=this.attitude(defender,attacker),after=Math.min(2,before+1);
     if(after===before)return;
     this.relations[defender][attacker]=after;this.aiPlans[defender]=null;
     this.addEvent(`${this.factions[defender].name}对${this.factions[attacker].name}的态度：${ATTITUDES[before]} → ${ATTITUDES[after]}（遭到进攻）`,'diplomacy',defender);
+  }
+  declareWar(target,options={}){
+    if(!this.running||this.paused||this.winner!==null||this.resolving)return {ok:false,reason:'当前不能宣战'};
+    const owner=this.currentHuman;
+    if(owner===null||!Number.isInteger(target)||target<0||target>=this.players||target===owner||!this.cells.some(c=>c.owner===target))return {ok:false,reason:'请选择其他存活国家'};
+    if(this.attitude(owner,target)===2)return {ok:false,reason:'已经对该国敌对'};
+    this.relations[owner][target]=2;this.aiPlans[owner]=null;
+    this.addEvent(`${this.factions[owner].name}对${this.factions[target].name}宣战，己方态度变为敌对；对方态度保持${ATTITUDES[this.attitude(target,owner)]}`,'diplomacy',owner);
+    const result={ok:true,kind:'diplomacy',owner,oldOwner:owner,fromId:-1,toId:-1,target};
+    result.actions=this.finishTurn([{...result}],options);return result;
   }
   unrest(cell){return cell&&this.turn>=cell.stableUntil?cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW).length:0;}
   recordUnrest(cell,kind,details={}){
@@ -90,9 +108,12 @@ export class Game {
       const cause=drains>0&&drains>=local.length-drains?'drain':'war';
       const homeland=cause==='drain'?oldOwner:center.homeland>=0?center.homeland:local.find(e=>Number.isInteger(e.victim))?.victim??oldOwner;
       const owner=this.players++;this.ai++;this.factions.push({...newCountry(owner,++this.secessions),origin:homeland,cause});
-      this.relations.forEach(row=>row.push(0));this.relations.push(Array(this.players).fill(0));
+      this.relations.forEach(row=>row.push(1));this.relations.push(Array(this.players).fill(1));this.relations[owner][owner]=0;
+      this.attackedBy.forEach(row=>row.push(false));this.attackedBy.push(Array(this.players).fill(false));
+      this.neutralInitiative.push(null);
       const enemies=new Set(history.filter(e=>e.kind===(cause==='drain'?'drain':'capture')&&Number.isInteger(e.actor)).map(e=>e.actor));
       if(cause==='drain')enemies.add(oldOwner);else enemies.delete(homeland);
+      if(cause==='war')this.relations[owner][homeland]=0;
       for(const enemy of enemies)this.relations[owner][enemy]=2;
       this.capitalLost.push(false);this.aiPlans.push(null);this.aiAnchors.push(center.id);this.spawns.push(center.id);
       for(const c of region){c.owner=owner;c.homeland=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
@@ -111,6 +132,7 @@ export class Game {
     if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'战斗尚未进行'};
     const from=this.cells[fromId],to=this.cells[toId];
     if(!from||!to||from.owner!==owner||!this.neighbors(fromId).includes(toId))return {ok:false,reason:'只能向上下左右相邻的领土出兵'};
+    if(!this.canAttack(owner,to.owner))return {ok:false,reason:this.attitude(owner,to.owner)===0?'对该国处于和平，先在外交面板宣战才能进攻':'对该国处于中立，未遭到该国进攻，不能主动攻击；可先宣战'};
     const amount=this.sent(from,ratio);
     if(amount<1)return {ok:false,reason:'兵力不足，至少留守 1 名士兵'};
     const oldOwner=to.owner,fromBefore=from.army,toBefore=to.army;from.army-=amount;
@@ -255,25 +277,27 @@ export class Game {
       const site=[...owned].sort((a,b)=>(Math.min(b.army,999)-this.aiThreat(b.id,owner)*4)-(Math.min(a.army,999)-this.aiThreat(a.id,owner)*4))[0];
       return this.constructCapital(site.id,owner);
     }
+    if(owned.some(c=>this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner&&this.attitude(owner,this.cells[id].owner)===1&&!this.attackedBy[owner][this.cells[id].owner])))this.prepareNeutralInitiative(owner);
     const counts=Array(this.players).fill(0);this.cells.forEach(c=>{if(c.owner>=0)counts[c.owner]++;});
     const fronts=[];
     for(const c of owned){
       for(const n of this.neighbors(c.id)){
-        if(this.cells[n].owner!==owner)fronts.push({rally:c.id,target:n});
+        if(this.cells[n].owner!==owner&&this.canAttack(owner,this.cells[n].owner))fronts.push({rally:c.id,target:n});
       }
     }
     if(!fronts.length)return null;
     const neutral=fronts.filter(f=>this.cells[f.target].owner===-1);
+    const hostile=fronts.filter(f=>this.cells[f.target].owner>=0&&this.attitude(owner,this.cells[f.target].owner)===2);
+    const retaliation=fronts.filter(f=>this.cells[f.target].owner>=0&&this.attitude(owner,this.cells[f.target].owner)===1);
+    const candidates=hostile.length?hostile:retaliation.length?retaliation:neutral;
     if(!neutral.length&&this.capitals(owner).length===1&&owned.length>=4){
       const site=owned.filter(c=>!this.isCapital(c)&&!this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner))
         .sort((a,b)=>b.army-a.army)[0];
       if(site)return this.constructCapital(site.id,owner);
     }
     let plan=this.aiPlans[owner];
-    const invalid=!plan||this.cells[plan.rally].owner!==owner||this.cells[plan.target].owner===owner;
-    const expansionAvailable=neutral.length&&(!plan||this.cells[plan.target].owner!==-1);
-    if(invalid||expansionAvailable||plan.age>=Math.max(128,this.cells.length)){
-      const candidates=neutral.length?neutral:fronts;
+    const invalid=!plan||this.cells[plan.rally].owner!==owner||!candidates.some(f=>f.target===plan.target);
+    if(invalid||plan.age>=Math.max(128,this.cells.length)){
       let best=null,bestScore=-Infinity;
       for(const f of candidates){
         const from=this.cells[f.rally],to=this.cells[f.target];
@@ -330,7 +354,7 @@ export class Game {
   aiThreat(id,owner){
     let threat=0;
     for(const n of this.neighbors(id)){
-      const c=this.cells[n];if(c.owner>=0&&c.owner!==owner)threat=Math.max(threat,c.army-1);
+      const c=this.cells[n];if(c.owner>=0&&c.owner!==owner&&this.attitude(c.owner,owner)!==0)threat=Math.max(threat,c.army-1);
     }
     return threat;
   }

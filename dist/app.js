@@ -14,6 +14,7 @@ function factionColumn(f,id){
 function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
 function setupGame(){
   game=new Game(currentOptions());selected=null;hovered=null;spectating=game.humans===0;lastController=game.currentHuman;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;playbackTime=0;
+  $('diplomacyFrom').replaceChildren();
   $('resultDialog').close();$('pauseOverlay').hidden=true;
   const l=LEVELS[config.level];
   $('mapTitle').innerHTML=config.mode==='campaign'?`${l.name}<span>${String(config.level+1).padStart(2,'0')}</span>`:'自由征途<span>∞</span>';
@@ -97,6 +98,11 @@ function buildCapital(){
   lastBattle=null;resolutionAt=playbackTime+350;flashActions(result.actions);
   toast(`已在 ${coord(result.toId)} 建设新首都`);checkResult();render();
 }
+function declareWar(target){
+  const result=game.declareWar(target,{defer:true});if(!result.ok){toast(result.reason);return;}
+  lastBattle=null;resolutionAt=playbackTime+350;
+  toast(`已对${game.factions[target].name}宣战，消耗一次行动`);checkResult();render();
+}
 function advanceResolution(now){
   if(!game.resolving||game.paused||now<resolutionAt)return;
   const phase=game.stepTurn();if(!phase)return;
@@ -120,7 +126,7 @@ function renderBattleResult(){
     : `${game.factions[a.owner].name}派出 ${a.amount} · 守军 ${a.toBefore} − ${Math.min(a.amount,a.toBefore)} = ${Math.max(0,a.toBefore-a.amount)}${a.captured?` · 已攻占，驻军 ${a.toAfter}`:' · 未攻占'}${reinforced?` · 随后增援 +${reinforced}`:''}${grew?` · 回合增兵 +${grew}`:''}${a.oldOwner>=0?' · 交战格本回合不自动增兵':''}`;
 }
 function render(){
-  if(game.currentHuman!==null&&game.currentHuman!==lastController){lastController=game.currentHuman;selected=null;hovered=null;}
+  if(game.currentHuman!==null&&game.currentHuman!==lastController){lastController=game.currentHuman;selected=null;hovered=null;$('diplomacyFrom').value=String(lastController);}
   const faction=lastController!==null?game.factions[lastController]:null;
   $('factionInfo').textContent=`${game.humans} 人类 · ${game.ai} 电脑${game.secessions?` · ${game.secessions} 个新国`:''}`;
   const observationName=game.observerMode==='step'?'走一步停一步':'一直走';
@@ -134,7 +140,7 @@ function render(){
   $('currentPlayer').style.setProperty('--player-color',faction?.color||game.factions[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
-  const neighbors=selected!==null&&game.cells[selected]?.owner===lastController&&game.running&&!game.paused&&!game.resolving&&!spectating?game.neighbors(selected):[];
+  const neighbors=selected!==null&&game.cells[selected]?.owner===lastController&&game.running&&!game.paused&&!game.resolving&&!spectating?game.neighbors(selected).filter(id=>game.canAttack(lastController,game.cells[id].owner)):[];
   $('board').setAttribute('aria-busy',game.resolving);
   const now=performance.now();
   game.cells.forEach((c,i)=>{
@@ -205,7 +211,7 @@ function renderDiplomacy(stats=game.stats()){
   const options=alive.map(s=>`<option value="${s.id}">${s.name}${s.human?' · 玩家 '+(s.id+1):''}</option>`).join('');
   if(select.innerHTML!==options){select.innerHTML=options;select.value=alive.some(s=>String(s.id)===previous)?previous:String(game.currentHuman??alive[0]?.id??0);}
   const from=Number(select.value),nation=game.factions[from];
-  const rows=alive.filter(s=>s.id!==from).map(s=>`<div class="diplomacy-row" data-relation-target="${s.id}"><strong style="color:${s.color}">${s.name}</strong><span>${nation.name}对${s.name}<b class="attitude attitude-${game.attitude(from,s.id)}" data-direction="out">${ATTITUDES[game.attitude(from,s.id)]}</b></span><span>${s.name}对${nation.name}<b class="attitude attitude-${game.attitude(s.id,from)}" data-direction="in">${ATTITUDES[game.attitude(s.id,from)]}</b></span></div>`).join('')||'<p class="diplomacy-empty">当前没有其他存活国家。</p>';
+  const rows=alive.filter(s=>s.id!==from).map(s=>`<div class="diplomacy-row" data-relation-target="${s.id}"><strong style="color:${s.color}">${s.name}</strong><span>${nation.name}对${s.name}<b class="attitude attitude-${game.attitude(from,s.id)}" data-direction="out">${ATTITUDES[game.attitude(from,s.id)]}</b></span><span>${s.name}对${nation.name}<b class="attitude attitude-${game.attitude(s.id,from)}" data-direction="in">${ATTITUDES[game.attitude(s.id,from)]}</b></span>${game.isHuman(from)&&from===lastController&&game.attitude(from,s.id)!==2?`<button class="secondary declare-war-btn" data-declare-war="${s.id}" ${!game.running||game.paused||game.resolving||game.currentHuman!==from||spectating?'disabled':''}>对${s.name}宣战 · 一次行动</button>`:''}</div>`).join('')||'<p class="diplomacy-empty">当前没有其他存活国家。</p>';
   if($('diplomacyList').innerHTML!==rows)$('diplomacyList').innerHTML=rows;
   $('diplomacyOrigin').textContent=nation.rebel?`因${nation.cause==='drain'?'持续抽调驻军':'战乱'}独立，原属国：${game.factions[nation.origin].name}`:'初始国家，各方向态度独立变化。';
 }
@@ -215,6 +221,7 @@ function renderIntel(){
   let note=c.owner===-1?'未占领 · 没有守军':game.isCapital(c)?'首都 · 每轮 +3 兵力':'普通领土 · 每轮 +1 兵力';
   if(selected!==null&&selected!==id&&game.cells[selected].owner===lastController&&game.neighbors(selected).includes(id)){
     const sent=game.sent(game.cells[selected],ratio);note=c.owner===lastController?`调兵：可增援 ${sent} 兵力`:sent>c.army?`可攻占 · 出兵后剩余 ${sent-c.army}`:`守军 ${c.army} · 可出兵 ${sent}`;
+    if(!game.canAttack(lastController,c.owner))note=game.attitude(lastController,c.owner)===0?'和平国家 · 宣战后才能进攻':'中立国家 · 仅能反击或先宣战';
   }
   if(c.owner>=0)note+=game.turn<c.stableUntil?` · 新国稳定期 ${c.stableUntil-game.turn} 回合`:` · 动荡 ${game.unrest(c)}/${UNREST_LIMIT}${game.unrest(c)>=2?'，注意分裂风险':''}`;
   if(c.owner>=0&&lastController!==null&&c.owner!==lastController)note+=` · 对${game.factions[lastController].name}${ATTITUDES[game.attitude(c.owner,lastController)]}，反向${ATTITUDES[game.attitude(lastController,c.owner)]}`;
@@ -240,6 +247,7 @@ $('waitBtn').onclick=waitTurn;
 $('moveCapitalBtn').onclick=moveCapital;
 $('buildCapitalBtn').onclick=buildCapital;
 $('diplomacyFrom').onchange=()=>renderDiplomacy();
+$('diplomacyList').onclick=e=>{const button=e.target.closest('[data-declare-war]');if(button&&!button.disabled)declareWar(Number(button.dataset.declareWar));};
 $('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};
 $('observerSpeeds').onclick=e=>{const speed=Number(e.target.dataset.observerSpeed);if(!game.automatic||game.winner!==null||![1,2,4,8].includes(speed))return;config.observerSpeed=speed;render();};
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};
