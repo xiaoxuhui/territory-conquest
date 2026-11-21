@@ -245,8 +245,7 @@ test('AI waits for enough support to survive a counterattack and uses half when 
 test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
   for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
     const g=new Game({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
-    // Losing a capital is now permanent, which changes late-game income and
-    // lengthens this hard endgame (7304 rounds in the reproduced seed).
+    // Keep a bounded full-conquest regression for the previously stuck seeds.
     while(g.winner===null&&g.turn<8000)g.waitTurn();
     assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
     assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);
@@ -319,4 +318,40 @@ test('a recaptured old site is ordinary until the player explicitly builds a new
   const g=running();g.aiMove=()=>null;Object.assign(g.cells[10],{owner:1,army:10});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:100});
   g.attack(10,11,1,1);g.attack(12,11,0,1);assert.equal(g.isCapital(g.cells[11]),false);assert.equal(g.capitalLost[0],true);
   assert.equal(g.buildCapital(11).ok,true);assert.equal(g.isCapital(g.cells[11]),true);assert.equal(g.capitalLost[0],false);assert.equal(g.cells.filter(c=>c.capital===0).length,1);
+});
+test('a second capital preserves the first, grows independently and spends exactly one action',()=>{
+  const g=running();g.aiMove=()=>null;Object.assign(g.cells[12],{owner:0,army:10});Object.assign(g.cells[13],{owner:0,army:5});
+  assert.equal(g.buildCapital(12,{defer:true}).ok,true);assert.equal(g.turn,1);assert.equal(g.cells[11].army,20);assert.equal(g.cells[12].army,10);
+  assert.deepEqual(g.capitals(0).map(c=>c.id),[11,12]);assert.equal(g.buildCapital(13).ok,false);
+  while(g.resolving)g.stepTurn();assert.equal(g.cells[11].army,23);assert.equal(g.cells[12].army,13);assert.equal(g.cells[13].army,6);
+  assert.equal(g.buildCapital(13).ok,false);assert.equal(g.buildCapital(12).ok,false);assert.equal(g.turn,1);
+});
+test('losing one capital leaves the other active and recapture requires explicit rebuilding',()=>{
+  const g=running();g.aiMove=()=>null;Object.assign(g.cells[12],{owner:0,army:100});g.buildCapital(12);
+  Object.assign(g.cells[10],{owner:1,army:10});g.cells[11].army=1;assert.equal(g.attack(10,11,1,1).captured,true);
+  assert.equal(g.capitalLost[0],false);assert.equal(g.isCapital(g.cells[12]),true);assert.equal(g.capitals(0).length,1);
+  assert.equal(g.attack(12,11,0,1).captured,true);assert.equal(g.isCapital(g.cells[11]),false);
+  const before=g.cells[12].army;g.waitTurn();assert.equal(g.cells[12].army,before+3);
+  assert.equal(g.buildCapital(11).ok,true);assert.deepEqual(g.capitals(0).map(c=>c.id),[11,12]);
+  Object.assign(g.cells[10],{owner:1,army:100});g.cells[11].army=1;g.attack(10,11,1,1);
+  Object.assign(g.cells[22],{owner:1,army:100});g.cells[12].army=1;g.attack(22,12,1,1);
+  assert.equal(g.capitalLost[0],true);assert.equal(g.capitals(0).length,0);
+});
+test('migration moves only the chosen capital and rejects invalid source cities',()=>{
+  const g=running();g.aiMove=()=>null;Object.assign(g.cells[12],{owner:0,army:10});Object.assign(g.cells[13],{owner:0,army:8});g.buildCapital(12);
+  const turn=g.turn;for(const fromId of [-1,13,g.spawns[1]])assert.equal(g.moveCapital(13,{fromId}).ok,false);assert.equal(g.turn,turn);
+  assert.equal(g.moveCapital(13,{fromId:12,defer:true}).ok,true);assert.equal(g.turn,turn+1);
+  assert.deepEqual(g.capitals(0).map(c=>c.id),[11,13]);assert.equal(g.cells[12].army,13);assert.equal(g.cells[13].army,9);
+});
+test('a second capital hands control to the next human without an extra action',()=>{
+  const g=new Game({humans:2,ai:0});g.running=true;Object.assign(g.cells[12],{owner:0,army:10});
+  assert.equal(g.buildCapital(12).ok,true);assert.equal(g.currentHuman,1);assert.equal(g.capitals(0).length,2);
+  assert.equal(g.buildCapital(13).ok,false);assert.equal(g.currentHuman,1);g.waitTurn();assert.equal(g.currentHuman,0);assert.equal(g.turn,1);
+});
+test('computer construction of a second capital uses its one action and preserves land',()=>{
+  const g=new Game({w:6,h:4});g.running=true;g.cells.forEach(c=>Object.assign(c,{owner:1,army:10,capital:-1}));
+  Object.assign(g.cells[23],{owner:0,capital:0});g.cells[7].capital=1;
+  const land=g.stats()[1].land,result=g.waitTurn();assert.equal(result.actions.length,1);assert.equal(result.actions[0].kind,'capital-build');
+  assert.equal(g.stats()[1].land,land);assert.equal(g.capitals(1).length,2);assert.equal(g.isCapital(g.cells[7]),true);
+  const turn=g.turn;assert.equal(g.constructCapital(8,1).ok,false);assert.equal(g.turn,turn);
 });

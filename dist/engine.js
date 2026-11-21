@@ -41,7 +41,8 @@ export class Game {
   }
   neighbors(id){const x=id%this.w,y=Math.floor(id/this.w);return [x>0?id-1:-1,x<this.w-1?id+1:-1,y>0?id-this.w:-1,y<this.h-1?id+this.w:-1].filter(i=>i>=0);}
   isHuman(owner){return Number.isInteger(owner)&&owner>=0&&owner<this.humans;}
-  isCapital(cell){return !!cell&&cell.owner>=0&&cell.capital===cell.owner&&!this.capitalLost[cell.owner];}
+  isCapital(cell){return !!cell&&cell.owner>=0&&cell.capital===cell.owner;}
+  capitals(owner){return this.cells.filter(c=>c.owner===owner&&this.isCapital(c));}
   aliveHumans(){return Array.from({length:this.humans},(_,id)=>id).filter(id=>this.cells.some(c=>c.owner===id));}
   get automatic(){return this.aliveHumans().length===0;}
   get continuous(){return this.automatic&&this.observerMode==='continuous';}
@@ -64,7 +65,7 @@ export class Game {
     else if(amount>to.army){to.army=amount-to.army;to.owner=owner;captured=true;}
     else to.army-=amount;
     if(captured&&oldOwner>=0&&to.capital===oldOwner){
-      this.capitalLost[oldOwner]=true;to.capital=-1;
+      to.capital=-1;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;
       this.addEvent(`${FACTIONS[oldOwner].name}首都被攻占，原首都失效`,'capital-lost',oldOwner);
     }
     const kind=oldOwner===owner?'reinforce':'attack';
@@ -85,8 +86,8 @@ export class Game {
     if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'当前不能建设首都'};
     const target=this.cells[toId];
     if(!target||target.owner!==owner)return {ok:false,reason:'首都只能建设在己方领土'};
-    if(this.cells.some(c=>c.owner===owner&&this.isCapital(c)))return {ok:false,reason:'已有首都，不能重复建设，请使用迁都'};
-    this.cells.forEach(c=>{if(c.capital===owner)c.capital=-1;});
+    if(this.isCapital(target))return {ok:false,reason:'这里已经是首都，请选择己方普通领土'};
+    if(this.capitals(owner).length>=2)return {ok:false,reason:'已有两座首都，请使用迁都'};
     this.capitalLost[owner]=false;target.capital=owner;this.aiPlans[owner]=null;
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     this.addEvent(`${FACTIONS[owner].name}在 ${location} 建设了新首都`,'capital-build',owner);
@@ -99,16 +100,16 @@ export class Game {
     if(result.ok)result.actions=this.finishTurn([{...result}],options);
     return result;
   }
-  relocateCapital(toId,owner){
+  relocateCapital(toId,owner,sourceId){
     if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'当前不能迁都'};
     if(this.capitalLost[owner])return {ok:false,reason:'当前没有首都，请先建设新首都'};
     const target=this.cells[toId];
     if(!target||target.owner!==owner)return {ok:false,reason:'首都只能迁到己方领土'};
     if(this.isCapital(target))return {ok:false,reason:'这里已经是你的首都'};
-    const previous=this.cells.find(c=>c.owner===owner&&this.isCapital(c));
-    if(!previous)return {ok:false,reason:'没有可迁移的首都'};
+    const previous=sourceId===undefined?this.capitals(owner)[0]:this.cells[sourceId];
+    if(!previous||previous.owner!==owner||!this.isCapital(previous))return {ok:false,reason:'请选择要迁移的己方首都'};
     const fromId=previous.id;
-    this.cells.forEach(c=>{if(c.capital===owner)c.capital=-1;});target.capital=owner;
+    previous.capital=-1;target.capital=owner;
     this.aiPlans[owner]=null;
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     this.addEvent(`${FACTIONS[owner].name}迁都至 ${location}`,'capital',owner);
@@ -117,7 +118,7 @@ export class Game {
   moveCapital(toId,options={}){
     if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
     if(this.currentHuman===null)return {ok:false,reason:'当前没有轮到人类玩家'};
-    const result=this.relocateCapital(toId,this.currentHuman);
+    const result=this.relocateCapital(toId,this.currentHuman,options.fromId);
     if(result.ok)result.actions=this.finishTurn([{...result}],options);
     return result;
   }
@@ -205,6 +206,11 @@ export class Game {
     }
     if(!fronts.length)return null;
     const neutral=fronts.filter(f=>this.cells[f.target].owner===-1);
+    if(!neutral.length&&this.capitals(owner).length===1&&owned.length>=4){
+      const site=owned.filter(c=>!this.isCapital(c)&&!this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner))
+        .sort((a,b)=>b.army-a.army)[0];
+      if(site)return this.constructCapital(site.id,owner);
+    }
     let plan=this.aiPlans[owner];
     const invalid=!plan||this.cells[plan.rally].owner!==owner||this.cells[plan.target].owner===owner;
     const expansionAvailable=neutral.length&&(!plan||this.cells[plan.target].owner!==-1);

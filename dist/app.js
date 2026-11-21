@@ -86,7 +86,7 @@ function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.
 function waitTurn(){if(game.continuous)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=playbackTime+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
 function moveCapital(){
   if(selected===null)return;
-  const result=game.moveCapital(selected,{defer:true});if(!result.ok){toast(result.reason);return;}
+  const result=game.moveCapital(selected,{defer:true,fromId:Number($('capitalSource').value)});if(!result.ok){toast(result.reason);return;}
   lastBattle=null;resolutionAt=playbackTime+350;flashActions(result.actions);
   toast(`首都已迁至 ${coord(result.toId)}`);checkResult();render();
 }
@@ -146,14 +146,21 @@ function render(){
   $('turnLabel').textContent=`第 ${game.turn} 回合`;
   $('waitBtn').hidden=!game.running||game.continuous;$('waitBtn').disabled=game.paused||game.resolving;
   $('waitBtn').textContent=game.automatic?'推进一回合':'蓄兵一回合';
-  const hasCapital=lastController!==null&&game.cells.some(c=>c.owner===lastController&&game.isCapital(c));
+  const capitals=lastController===null?[]:game.capitals(lastController),hasCapital=capitals.length>0;
+  const capitalSource=$('capitalSource'),previousSource=capitalSource.value;
+  const sourceOptions=capitals.map(c=>`<option value="${c.id}">迁出 ${coord(c.id)}</option>`).join('');
+  if(capitalSource.innerHTML!==sourceOptions){capitalSource.innerHTML=sourceOptions;if(capitals.some(c=>String(c.id)===previousSource))capitalSource.value=previousSource;}
+  capitalSource.hidden=!game.running||game.automatic||spectating||capitals.length<2;
+  capitalSource.disabled=game.paused||game.resolving;
   $('moveCapitalBtn').hidden=!game.running||game.automatic||spectating||!hasCapital;
-  $('buildCapitalBtn').hidden=!game.running||game.automatic||spectating||hasCapital;
+  $('buildCapitalBtn').hidden=!game.running||game.automatic||spectating;
+  $('buildCapitalBtn').textContent=`建设首都 ${capitals.length}/2`;
   const capitalTarget=selected===null?null:game.cells[selected];
   const capitalLost=game.currentHuman!==null&&game.capitalLost[game.currentHuman];
   $('moveCapitalBtn').disabled=game.paused||game.resolving||capitalLost||!capitalTarget||capitalTarget.owner!==game.currentHuman||game.isCapital(capitalTarget);
   $('moveCapitalBtn').title=capitalLost?'当前没有首都，请先建设新首都':'选中己方普通领土后迁都，消耗本次行动';
-  $('buildCapitalBtn').disabled=game.paused||game.resolving||!capitalTarget||capitalTarget.owner!==game.currentHuman||hasCapital;
+  $('buildCapitalBtn').disabled=game.paused||game.resolving||!capitalTarget||capitalTarget.owner!==game.currentHuman||game.isCapital(capitalTarget)||capitals.length>=2;
+  $('buildCapitalBtn').title=capitals.length>=2?'已有两座首都，可以选择一座迁都':'选中己方普通领土建设，消耗一次行动';
   const ended=game.winner!==null;
   $('gameState').textContent=ended?'战斗结束':game.paused?'战局暂停':game.resolving?'回合结算中':game.running?(game.automatic?(game.continuous?'自动对战中':'等待下一步'):game.humans>1?`${faction.name}的回合`:'轮到你了'):'准备就绪';
   $('gameState').classList.toggle('running',game.running&&!game.paused);
