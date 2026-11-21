@@ -81,7 +81,7 @@ test('hostile computer attacks its enemy before expanding into neighboring empty
 });
 test('all-peace computer games expand and then coexist without starting unauthorized wars',()=>{
   const g=new Game({w:6,h:4,humans:0,ai:2,observerMode:'step'});g.running=true;
-  g.relations[0][1]=0;g.relations[1][0]=0;
+  g.relations[0][1]=0;g.relations[1][0]=0;g.resolveDiplomacy=()=>[];
   for(let i=0;i<120;i++)g.waitTurn();assert.equal(g.winner,null);assert.equal(g.secessions,0);assert.ok(g.stats().slice(0,2).every(s=>s.land>1));
   assert.equal(g.attitude(0,1),0);assert.equal(g.attitude(1,0),0);assert.equal(g.events.some(e=>e.kind==='battle'),false);
 });

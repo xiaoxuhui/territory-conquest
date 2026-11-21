@@ -9,11 +9,12 @@ function fixture(attitude=2,ai=2){
   const aiMove=g.aiMove.bind(g);g.aiMove=id=>id===0?aiMove(id):null;return g;
 }
 function round(g){g.waitTurn({defer:true});const actions=[];while(g.resolving){const phase=g.stepTurn();if(phase?.action?.ok)actions.push(phase.action);}return actions;}
-test('an unseen country is neutral even if stale raw hostility exists and exploration remains adjacent',()=>{
+test('a distant country with preserved hostility can be approached one neighboring tile per round',()=>{
   const g=fixture(),initial=g.cells[10].army;
-  assert.equal(g.attitude(0,1),1);assert.equal(g.tryStartMarch(0,[g.cells[7]]),null);
-  const actions=round(g);assert.equal(actions.length,1);assert.ok(g.neighbors(actions[0].fromId).includes(actions[0].toId));assert.notEqual(actions[0].toId,10);
-  assert.equal(g.aiMarches[0],null);assert.equal(g.cells[10].army,initial+3);assert.equal(g.unrest(g.cells[10]),0);assert.equal(g.players,2);
+  assert.equal(g.attitude(0,1),2);let actions=round(g);assert.equal(actions.length,1);assert.equal(actions[0].toId,8);assert.equal(g.cells[10].army,initial+3);
+  actions=round(g);assert.equal(actions[0].fromId,8);assert.equal(actions[0].toId,9);assert.equal(g.cells[10].army,initial+6);
+  actions=round(g);assert.equal(actions[0].fromId,9);assert.equal(actions[0].toId,10);assert.equal(actions[0].hostileAttack,true);assert.equal(g.aiMarches[0],null);
+  assert.equal(g.unrest(g.cells[10]),0);assert.equal(g.players,2);
 });
 test('peaceful reinforcements march to the border, add paid troops and preserve recipient ownership and relations',()=>{
   const g=fixture(0);round(g);round(g);const actions=round(g),support=actions[0];

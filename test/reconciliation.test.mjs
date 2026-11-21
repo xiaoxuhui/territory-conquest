@@ -19,7 +19,7 @@ test('equal hostility rises to neutral, equal neutrality rises to peace, and pea
 });
 test('each unordered pair receives one one-percent trial per round with no rerolls or extra rise',()=>{
   assert.equal(DIPLOMACY_IMPROVE_CHANCE,.01);
-  for(const [value,expected] of [[.009999,0],[.01,1],[.099999,1],[.999,1]]){
+  for(const [value,expected] of [[.009999,0],[.01,2],[.019999,2],[.02,1],[.03,1],[.099999,1],[.999,1]]){
     const g=running();let draws=0;g.rng=()=>{draws++;return value;};g.resolveDiplomacy();assert.equal(g.attitude(0,1),expected);assert.equal(draws,1);
     for(let i=0;i<10;i++)g.resolveDiplomacy();assert.equal(draws,1);
   }
