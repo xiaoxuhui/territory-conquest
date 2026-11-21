@@ -185,3 +185,32 @@ test('automatic observation starts only after the final human is eliminated',()=
   g.cells.forEach(c=>{if(c.owner===1)c.owner=2;});assert.equal(g.automatic,true);
   for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,1);assert.equal(g.resolving,true);
 });
+test('step observation waits indefinitely and advances exactly one full computer round per command',()=>{
+  const g=new Game({humans:0,ai:3,observerMode:'step'});g.running=true;
+  const before=JSON.stringify(g.cells);for(let i=0;i<2400;i++)g.update(.25);
+  assert.equal(g.automatic,true);assert.equal(g.continuous,false);assert.equal(g.turn,0);assert.equal(JSON.stringify(g.cells),before);
+  g.waitTurn({defer:true});assert.equal(g.turn,1);assert.equal(g.resolving,true);
+  assert.equal(g.waitTurn().ok,false);while(g.resolving)g.stepTurn();assert.ok(g.stats().every(s=>s.land===2));
+  const after=JSON.stringify(g.cells);for(let i=0;i<2400;i++)g.update(.25);
+  assert.equal(g.turn,1);assert.equal(JSON.stringify(g.cells),after);
+});
+test('switching a continuous computer game to step finishes its current round and stops',()=>{
+  const g=new Game({humans:0,ai:3});g.running=true;
+  for(let i=0;i<4;i++)g.update(.25);g.stepTurn();const round=g.turn;
+  g.setObserverMode('step');assert.equal(g.resolving,true);while(g.resolving)g.stepTurn();
+  const after=JSON.stringify(g.cells);for(let i=0;i<40;i++)g.update(.25);
+  assert.equal(g.turn,round);assert.equal(JSON.stringify(g.cells),after);assert.ok(g.stats().every(s=>s.land===2));
+  g.setObserverMode('continuous');assert.equal(g.turn,round);assert.equal(JSON.stringify(g.cells),after);
+  for(let i=0;i<4;i++)g.update(.25);assert.equal(g.turn,round+1);
+});
+test('observation switches reset timing, respect pause and never automate live human players',()=>{
+  const g=new Game({humans:0,ai:1});g.running=true;g.update(.25);g.update(.25);
+  g.setObserverMode('step');g.setObserverMode('continuous');assert.equal(g.automaticElapsed,0);
+  g.paused=true;for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,0);
+  g.setObserverMode('step');g.paused=false;for(let i=0;i<20;i++)g.update(.25);assert.equal(g.turn,0);
+  assert.throws(()=>g.setObserverMode('invalid'));assert.throws(()=>new Game({observerMode:'invalid'}));
+  for(const ai of [0,2])for(const mode of ['step','continuous']){
+    const human=new Game({humans:1,ai,observerMode:mode});human.running=true;
+    for(let i=0;i<100;i++)human.update(.25);assert.equal(human.turn,0);assert.equal(human.continuous,false);
+  }
+});

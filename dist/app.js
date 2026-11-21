@@ -3,11 +3,11 @@ const $=id=>document.getElementById(id);
 const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 let wins=[];
 try{const saved=JSON.parse(localStorage.getItem('territory-wins')||'[]');if(Array.isArray(saved))wins=saved.filter(n=>Number.isInteger(n)&&n>=0&&n<6);}catch{}
-let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:14,h:10};
+let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:14,h:10,observerMode:'continuous'};
 let game,selected=null,hovered=null,ratio=.5,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
 let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0;
 const flashes=new Map();
-function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
+function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
 function setupGame(){
   game=new Game(currentOptions());selected=null;hovered=null;spectating=game.humans===0;lastController=game.currentHuman;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;
   $('resultDialog').close();$('pauseOverlay').hidden=true;
@@ -44,18 +44,18 @@ function renderSettings(){
   const total=config.humans+config.ai;
   $('minusAI').disabled=config.ai===0||total===1;$('plusAI').disabled=total>=8;
   $('minusHuman').disabled=config.humans===0||total===1;$('plusHuman').disabled=total>=8;
-  $('playerSetupNote').textContent=`${config.humans} 位人类 + ${config.ai} 位电脑，共 ${total}/8 个阵营。${config.humans===0?'开始后自动运行，无需逐回合点击。':config.ai===0?(config.humans===1?'单人练习，全程手动操作。':'全程由你手动轮流控制各位玩家。'):'人类依次行动，再结算电脑回合。'}`;
+  $('playerSetupNote').textContent=`${config.humans} 位人类 + ${config.ai} 位电脑，共 ${total}/8 个阵营。${config.humans===0?(config.observerMode==='step'?'走一步停一步，每次点击推进一回合。':'一直走，开始后自动连续运行。'):config.ai===0?(config.humans===1?'单人练习，全程手动操作。':'全程由你手动轮流控制各位玩家。'):'人类依次行动，再结算电脑回合。'}`;
   $('mapSize').value=`${config.w},${config.h}`;
   $('difficulty').querySelectorAll('button').forEach(b=>b.disabled=game.ai===0);
   if(game.ai===0){$('difficultyTag').textContent='无电脑';$('difficultyDesc').textContent='当前没有电脑对手，难度设置不影响人类玩家。';}
-  else if(game.humans===0)$('difficultyDesc').textContent='电脑将连续自动对战，每轮各行动一次，可随时暂停。';
+  else if(game.humans===0)$('difficultyDesc').textContent=game.observerMode==='step'?'每次推进一回合，每个电脑最多行动一次，然后停下。':'电脑将连续自动对战，每轮各行动一次，可随时暂停。';
 }
 function requestReset(fn){
   if(game.running&&game.winner===null&&!resultShown){resetWasPaused=game.paused;game.paused=true;pendingReset=fn;$('confirmDialog').showModal();render();}
   else{fn();setupGame();}
 }
 function cancelReset(){pendingReset=null;$('confirmDialog').close();game.paused=resetWasPaused;renderSettings();render();}
-function start(){game.running=true;game.paused=false;game.addEvent(game.humans===0?'自动对战开始。电脑将连续行动，可随时暂停。':game.humans>1?'人类玩家依次行动；全部行动后，电脑各行动一次，再统一增兵。':'轮到你了。你行动一次，各电脑最多行动一次。');tone(370);render();}
+function start(){game.running=true;game.paused=false;game.addEvent(game.humans===0?(game.observerMode==='step'?'单步观战开始。点击「推进一回合」，结算后停下。':'自动对战开始。电脑将连续行动，可随时暂停。'):game.humans>1?'人类玩家依次行动；全部行动后，电脑各行动一次，再统一增兵。':'轮到你了。你行动一次，各电脑最多行动一次。');tone(370);render();}
 function togglePause(){if(!game.running)return;game.paused=!game.paused;render();}
 function toast(msg){$('toast').textContent=msg;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,2600);}
 function tone(freq=500){if(!sound)return;try{audioCtx??=new (window.AudioContext||window.webkitAudioContext)();if(audioCtx.state==='suspended')audioCtx.resume();const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type='sine';o.frequency.value=freq;g.gain.setValueAtTime(.045,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+.12);o.connect(g).connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+.13);}catch{}}
@@ -83,7 +83,7 @@ function clickTile(id){
 }
 function coord(id){return `${String.fromCharCode(65+id%game.w)}${Math.floor(id/game.w)+1}`;}
 function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.toId,{until:performance.now()+350,captured:a.captured});}
-function waitTurn(){if(game.automatic)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=performance.now()+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
+function waitTurn(){if(game.continuous)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=performance.now()+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
 function advanceResolution(now){
   if(!game.resolving||game.paused||now<resolutionAt)return;
   const phase=game.stepTurn();if(!phase)return;
@@ -105,8 +105,12 @@ function renderBattleResult(){
 function render(){
   if(game.currentHuman!==null&&game.currentHuman!==lastController){lastController=game.currentHuman;selected=null;hovered=null;}
   const faction=lastController!==null?FACTIONS[lastController]:null;
+  const observationName=game.observerMode==='step'?'走一步停一步':'一直走';
+  $('observerControls').hidden=!game.automatic;
+  document.querySelectorAll('[data-observer-mode]').forEach(b=>{const active=b.dataset.observerMode===game.observerMode;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);b.disabled=game.winner!==null;});
+  $('observerModeNote').textContent=game.observerMode==='step'?'每次点击「推进一回合」，电脑各行动一次并增兵，然后停下。切换时会完成当前回合。':'电脑连续自动运行，可随时暂停，或切换为走一步停一步。';
   document.documentElement.style.setProperty('--accent',faction?.color||FACTIONS[0].color);
-  $('currentPlayer').textContent=game.humans===0?'纯电脑观战 · 自动运行':spectating&&game.automatic?'自动观战 · 剩余电脑继续对战':`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
+  $('currentPlayer').textContent=game.humans===0?`纯电脑观战 · ${observationName}`:spectating&&game.automatic?`电脑观战 · ${observationName}`:`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
   $('currentPlayer').style.setProperty('--player-color',faction?.color||FACTIONS[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
@@ -126,10 +130,10 @@ function render(){
   });
   $('timer').textContent=formatTime(game.time);
   $('turnLabel').textContent=`第 ${game.turn} 回合`;
-  $('waitBtn').hidden=!game.running||game.automatic;$('waitBtn').disabled=game.paused||game.resolving;
-  $('waitBtn').textContent=spectating?'推进一回合':'蓄兵一回合';
+  $('waitBtn').hidden=!game.running||game.continuous;$('waitBtn').disabled=game.paused||game.resolving;
+  $('waitBtn').textContent=game.automatic?'推进一回合':'蓄兵一回合';
   const ended=game.winner!==null;
-  $('gameState').textContent=ended?'战斗结束':game.paused?'战局暂停':game.resolving?'回合结算中':game.running?(game.automatic?'自动对战中':game.humans>1?`${faction.name}的回合`:'轮到你了'):'准备就绪';
+  $('gameState').textContent=ended?'战斗结束':game.paused?'战局暂停':game.resolving?'回合结算中':game.running?(game.automatic?(game.continuous?'自动对战中':'等待下一步'):game.humans>1?`${faction.name}的回合`:'轮到你了'):'准备就绪';
   $('gameState').classList.toggle('running',game.running&&!game.paused);
   $('pauseBtn').disabled=!game.running;$('pauseBtn').setAttribute('aria-label',game.paused?'继续游戏':'暂停游戏');$('pauseBtn').innerHTML=`<svg><use href="#i-${game.paused?'play':'pause'}"/></svg>`;
   $('pauseOverlay').hidden=!game.paused||!game.running||$('helpDialog').open||$('confirmDialog').open||$('resultDialog').open;
@@ -138,7 +142,7 @@ function render(){
   if(ended){$('hintTitle').textContent=game.isHuman(game.winner)?(game.humans===1?'全境归你，征途完成！':`玩家 ${game.winner+1} · ${FACTIONS[game.winner].name}获胜`):`${FACTIONS[game.winner].name}统一了全境`;$('hintText').textContent='选择新关卡，或者点击重开再战一局。';}
   else if(game.paused){$('hintTitle').textContent='战局已暂停';$('hintText').textContent='点击继续，或按空格键返回战斗。';}
   else if(game.resolving){$('hintTitle').textContent='正在结算本回合';$('hintText').textContent='先显示战斗扣兵，再显示电脑行动和增兵。';}
-  else if(game.automatic){$('hintTitle').textContent=game.running?'自动运行中':'纯电脑自动对战';$('hintText').textContent=game.running?'电脑会自行出兵和增兵，无需点击，可随时暂停。':'点击「开始观战」后，电脑会自动连续对战。';}
+  else if(game.automatic){$('hintTitle').textContent=game.observerMode==='step'?'走一步停一步':game.running?'自动运行中':'纯电脑自动对战';$('hintText').textContent=game.observerMode==='step'?(game.running?'点击「推进一回合」或按 E，完成一轮后停下。':'点击「开始观战」后，可逐回合推进电脑对战。'):game.running?'电脑会自行出兵和增兵，无需点击，可随时暂停。':'点击「开始观战」后，电脑会自动连续对战。';}
   else if(!game.running){$('hintTitle').textContent=game.humans===0?'观看电脑之间的领土争夺':'从你的第一块领土开始';$('hintText').textContent=game.humans>1?'各位玩家在同一台设备上轮流操作。':'回合制对战，你思考时电脑不动。';}
   else if(selected!==null&&game.cells[selected].owner===lastController){const c=game.cells[selected];$('hintTitle').textContent=`${coord(selected)} 已选中 · 可派出 ${game.sent(c,ratio)} 兵力`;$('hintText').textContent='出兵才推进回合；可以慢慢思考，不必抢点。';}
   else{$('hintTitle').textContent=game.humans>1?`轮到玩家 ${lastController+1} · ${faction.name}`:'轮到你了，慢慢规划';$('hintText').textContent='选中己方领土出兵，或蓄兵一回合。';}
@@ -179,6 +183,7 @@ function checkResult(){
 $('startBtn').onclick=start;$('pauseBtn').onclick=togglePause;$('resumeBtn').onclick=togglePause;
 $('restartBtn').onclick=()=>requestReset(()=>{});
 $('waitBtn').onclick=waitTurn;
+$('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};
 $('campaignTab').onclick=()=>{if(config.mode!=='campaign')requestReset(()=>config.mode='campaign');};
 $('customTab').onclick=()=>{if(config.mode!=='custom')requestReset(()=>config.mode='custom');};
@@ -203,7 +208,7 @@ $('mobileSetup').onclick=()=>{const open=$('setup').classList.toggle('mobile-ope
 document.addEventListener('keydown',e=>{
   if(document.querySelector('dialog[open]')||['SELECT','INPUT','TEXTAREA'].includes(e.target.tagName))return;
   if(e.code==='Space'&&e.target.tagName!=='BUTTON'){e.preventDefault();if(game.running)togglePause();else if(game.time===0)start();}
-  if(e.key.toLowerCase()==='e'&&game.running&&!game.automatic){e.preventDefault();waitTurn();}
+  if(e.key.toLowerCase()==='e'&&game.running&&!game.continuous){e.preventDefault();waitTurn();}
   if(e.key==='Escape'){selected=null;render();}
   if(e.key.startsWith('Arrow')&&selected!==null&&game.running&&!game.paused&&!spectating){
     e.preventDefault();const x=selected%game.w,y=Math.floor(selected/game.w);let to=null;

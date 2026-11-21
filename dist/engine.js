@@ -18,12 +18,12 @@ export const LEVELS = [
 ];
 export function seededRandom(seed) { return () => { let t=seed+=0x6D2B79F5;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296; }; }
 export class Game {
-  constructor({w=10,h=8,humans=1,ai=1,difficulty='normal',seed=1}={}) {
+  constructor({w=10,h=8,humans=1,ai=1,difficulty='normal',seed=1,observerMode='continuous'}={}) {
     const players=humans+ai;
     if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(humans)||humans<0||!Number.isInteger(ai)||ai<0||players<1||players>8||players>(w-2)*(h-2)) throw new Error('人类与电脑合计需为 1–8 位，且地图必须能容纳所有玩家');
     this.w=w;this.h=h;this.humans=humans;this.ai=ai;this.players=players;this.currentHuman=humans?0:null;this.difficulty=difficulty;this.rng=seededRandom(seed);
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1}));
-    this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;
+    this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
     const places=[this.w+1];
     while(places.length<players) {
       let best=-1,score=-1;
@@ -42,6 +42,11 @@ export class Game {
   isHuman(owner){return Number.isInteger(owner)&&owner>=0&&owner<this.humans;}
   aliveHumans(){return Array.from({length:this.humans},(_,id)=>id).filter(id=>this.cells.some(c=>c.owner===id));}
   get automatic(){return this.aliveHumans().length===0;}
+  get continuous(){return this.automatic&&this.observerMode==='continuous';}
+  setObserverMode(mode){
+    if(!['step','continuous'].includes(mode))throw new Error('请选择单步或连续观战模式');
+    this.observerMode=mode;this.automaticElapsed=0;
+  }
   stats(){return FACTIONS.slice(0,this.players).map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
   addEvent(text,kind='system',owner=-1){this.events.unshift({text,kind,owner,time:this.time});this.events=this.events.slice(0,30);}
   sent(from,ratio=0.5){return Math.max(0,Math.min(from.army-1,Math.floor(from.army*Math.min(1,Math.max(0,ratio)))));}
@@ -131,7 +136,7 @@ export class Game {
     // Human-controlled games, including zero-computer games, remain manual.
     // An observer-only game schedules its own rounds and uses the same staged
     // resolution as a human turn, preserving action counts and combat rules.
-    if(!this.automatic){this.automaticElapsed=0;return [];}
+    if(!this.continuous){this.automaticElapsed=0;return [];}
     if(this.resolving)return [];
     this.automaticElapsed+=dt;
     if(this.automaticElapsed>=0.8){this.automaticElapsed=0;this.waitTurn({defer:true});}
