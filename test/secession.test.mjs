@@ -65,7 +65,7 @@ test('neutral capture, failed attacks and invalid actions create no unrest or ne
   g.paused=true;assert.deepEqual(g.resolveSecessions(),[]);assert.equal(g.secessions,0);
 });
 test('old troop-withdrawal records are ignored and cannot be added back to active unrest',()=>{
-  const g=running(),cell=g.cells[11];cell.unrestEvents=Array.from({length:8},()=>({turn:0,kind:'drain',actor:0}));
+  const g=running(),cell=g.cells[11];Object.assign(g.cells[12],{owner:0,army:10});Object.assign(g.cells[10],{owner:1,army:10});cell.unrestEvents=Array.from({length:8},()=>({turn:0,kind:'drain',actor:0}));
   assert.equal(g.unrest(cell),0);assert.deepEqual(g.resolveSecessions(),[]);g.recordUnrest(cell,'drain',{actor:0});assert.equal(g.unrest(cell),0);
   cell.unrestEvents.push(...Array.from({length:3},()=>({turn:0,kind:'capture',actor:1,victim:0})));
   assert.equal(g.unrest(cell),3);assert.deepEqual(g.resolveSecessions(),[]);g.recordUnrest(cell,'capture',{actor:1,victim:0});

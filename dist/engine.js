@@ -67,17 +67,31 @@ export class Game {
     this.observerMode=mode;this.automaticElapsed=0;
   }
   stats(){return this.factions.map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
-  attitude(from,to){return this.relations[from]?.[to]??0;}
-  canAttack(from,to){return to<0||from===to||this.attitude(from,to)===2||(this.attitude(from,to)===1&&(this.isHuman(from)||this.attackedBy[from]?.[to]===true||(this.neutralInitiative[from]?.turn===this.turn&&this.neutralInitiative[from].allowed)));}
+  attitude(from,to){return from===to?0:this.sharesBorder(from,to)?this.relations[from]?.[to]??1:1;}
+  syncUnseenRelations(){
+    const contacts=new Set();
+    for(const c of this.cells)if(c.owner>=0)for(const id of this.neighbors(c.id)){
+      const other=this.cells[id].owner;if(other>=0&&other!==c.owner)contacts.add(`${Math.min(c.owner,other)}:${Math.max(c.owner,other)}`);
+    }
+    for(let a=0;a<this.players;a++)for(let b=a+1;b<this.players;b++)if(!contacts.has(`${a}:${b}`)){
+      this.relations[a][b]=1;this.relations[b][a]=1;this.attackedBy[a][b]=false;this.attackedBy[b][a]=false;
+      if(this.aiMarches[a]?.target===b)this.aiMarches[a]=null;
+      if(this.aiMarches[b]?.target===a)this.aiMarches[b]=null;
+    }
+  }
+  canAttack(from,to){return to<0||from===to||(this.sharesBorder(from,to)&&(this.attitude(from,to)===2||(this.attitude(from,to)===1&&(this.isHuman(from)||this.attackedBy[from]?.[to]===true||(this.neutralInitiative[from]?.turn===this.turn&&this.neutralInitiative[from].allowed)))));}
   prepareNeutralInitiative(owner){
     if(this.neutralInitiative[owner]?.turn!==this.turn)this.neutralInitiative[owner]={turn:this.turn,allowed:this.rng()<NEUTRAL_ATTACK_CHANCE};
   }
   resolveDiplomacy(){
-    if(!this.running||this.paused||this.winner!==null||this.turn<1||this.diplomacySettledTurn===this.turn)return [];
+    if(!this.running||this.paused||this.winner!==null)return [];
+    this.syncUnseenRelations();
+    if(this.turn<1||this.diplomacySettledTurn===this.turn)return [];
     this.diplomacySettledTurn=this.turn;
     const alive=this.stats().filter(s=>s.land).map(s=>s.id),changes=[];
     for(let i=0;i<alive.length;i++)for(let j=i+1;j<alive.length;j++){
       const a=alive[i],b=alive[j],ab=this.attitude(a,b),ba=this.attitude(b,a);
+      if(!this.sharesBorder(a,b))continue;
       if(ab===0&&ba===0)continue;
       if(this.rng()>=DIPLOMACY_IMPROVE_CHANCE)continue;
       // Lower stored index means friendlier: peace > neutral > hostile.
@@ -90,6 +104,7 @@ export class Game {
     return changes;
   }
   reactToAttack(attacker,defender){
+    if(!this.sharesBorder(attacker,defender))return;
     this.attackedBy[defender][attacker]=true;
     const before=this.attitude(defender,attacker),after=Math.min(2,before+1);
     if(after===before)return;
@@ -100,6 +115,7 @@ export class Game {
     if(!this.running||this.paused||this.winner!==null||this.resolving)return {ok:false,reason:'当前不能宣战'};
     const owner=this.currentHuman;
     if(owner===null||!Number.isInteger(target)||target<0||target>=this.players||target===owner||!this.cells.some(c=>c.owner===target))return {ok:false,reason:'请选择其他存活国家'};
+    if(!this.sharesBorder(owner,target))return {ok:false,reason:'尚未接触该国，关系固定为中立'};
     if(this.attitude(owner,target)===2)return {ok:false,reason:'已经对该国敌对'};
     this.relations[owner][target]=2;this.aiPlans[owner]=null;
     this.addEvent(`${this.factions[owner].name}对${this.factions[target].name}宣战，己方态度变为敌对；对方态度保持${ATTITUDES[this.attitude(target,owner)]}`,'diplomacy',owner);
@@ -140,11 +156,12 @@ export class Game {
       center.capital=owner;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;this.aiPlans[oldOwner]=null;
       const location=`${String.fromCharCode(65+center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
       this.addEvent(`${location}一带因反复易手发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，原格兵力 ×${SECESSION_ARMY_MULTIPLIER}，电脑控制）`,'secession',owner);
-      this.addEvent(`${this.factions[owner].name}因战乱独立，对原属国${this.factions[homeland].name}保持和平${enemies.size?`，敌视进攻者${[...enemies].map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
+      const knownEnemies=[...enemies].filter(id=>this.sharesBorder(owner,id));
+      this.addEvent(`${this.factions[owner].name}因战乱独立，${this.sharesBorder(owner,homeland)?`对原属国${this.factions[homeland].name}保持和平`:`尚未接触原属国${this.factions[homeland].name}，保持中立`}${knownEnemies.length?`，敌视进攻者${knownEnemies.map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
       countries.push({owner,oldOwner,homeland,cause,capital:center.id,cells:region.map(c=>c.id),armyChanges});
     }
-    return countries;
+    if(countries.length)this.syncUnseenRelations();return countries;
   }
   addEvent(text,kind='system',owner=-1){this.events.unshift({text,kind,owner,time:this.time});this.events=this.events.slice(0,30);}
   sent(from,ratio=0.5){return Math.max(0,Math.min(from.army-1,Math.floor(from.army*Math.min(1,Math.max(0,ratio)))));}
@@ -176,7 +193,7 @@ export class Game {
       this.addEvent(`${this.factions[owner].name}攻占了${this.factions[oldOwner].name}的领土`,'battle',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
     }
-    this.checkWinner();
+    if(captured)this.syncUnseenRelations();this.checkWinner();
     return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,hostileAttack,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
   }
   checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${this.factions[owner].name}占领全图，获得胜利！`,'victory',owner);}}
@@ -333,7 +350,7 @@ export class Game {
   tryStartMarch(owner,owned){
     if(this.marchDecisionTurn[owner]===this.turn)return null;
     this.marchDecisionTurn[owner]=this.turn;
-    const targets=this.factions.map((_,id)=>id).filter(id=>id!==owner&&this.cells.some(c=>c.owner===id)&&(this.attitude(owner,id)===0||(this.attitude(owner,id)===2&&!this.sharesBorder(owner,id))));
+    const targets=this.factions.map((_,id)=>id).filter(id=>id!==owner&&this.cells.some(c=>c.owner===id)&&this.sharesBorder(owner,id)&&this.attitude(owner,id)===0);
     if(!targets.length||!owned.some(c=>c.army>=2)||this.rng()>=MARCH_CHANCE)return null;
     targets.sort((a,b)=>this.attitude(owner,b)-this.attitude(owner,a)||a-b);
     for(const target of targets)for(const source of [...owned].sort((a,b)=>b.army-a.army)){

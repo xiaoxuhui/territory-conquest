@@ -26,7 +26,7 @@ test('neutral expansion, friendly transfers, invalid moves, insufficient armies 
 });
 test('friendly withdrawals do not create a country or alter any diplomatic direction',()=>{
   for(const attitude of [0,1,2]){
-    const g=running();g.relations[0][1]=attitude;Object.assign(g.cells[12],{owner:0,army:10});for(let i=0;i<12;i++)g.playTurn(11,12,1);
+    const g=running();g.relations[0][1]=attitude;Object.assign(g.cells[12],{owner:0,army:10});Object.assign(g.cells[13],{owner:1,army:10});for(let i=0;i<12;i++)g.playTurn(11,12,1);
     assert.equal(g.players,2);assert.equal(g.secessions,0);assert.equal(g.attitude(0,1),attitude);assert.equal(g.attitude(1,0),1);
   }
 });
@@ -38,7 +38,8 @@ test('war secession remembers the original homeland even under hostile occupatio
   assert.match(g.events.find(e=>e.kind==='diplomacy'&&e.owner===2).text,/原属国青岚保持和平，敌视进攻者赤焰/);
 });
 test('new countries expand the full directed matrix without erasing existing relations or affecting another game',()=>{
-  const g=running({ai:7});g.relations[1][0]=0;g.declareWar(1);Object.assign(g.cells[12],{owner:1,army:100});g.attack(11,12,0,.5);
+  const g=running({ai:7});Object.assign(g.cells[12],{owner:1,army:100});g.relations[1][0]=0;g.declareWar(1);g.attack(11,12,0,.5);
+  Object.assign(g.cells[41],{owner:0,army:10});Object.assign(g.cells[30],{owner:1,army:10});
   g.cells[40].owner=0;g.cells[40].unrestEvents=Array.from({length:4},()=>({turn:0,kind:'capture',actor:1,victim:0}));g.resolveSecessions();
   assert.equal(g.players,9);assert.equal(g.relations.length,9);assert.ok(g.relations.every(row=>row.length===9));assert.equal(g.attitude(1,0),1);
   assert.equal(g.attitude(8,0),0);assert.equal(g.attitude(8,1),2);assert.equal(g.attitude(0,8),1);assert.equal(g.attitude(8,8),0);
@@ -66,7 +67,7 @@ test('neutral computers without initiative wait but a peaceful victim may retali
   assert.equal(g.attack(11,12,0,.5).ok,true);assert.equal(g.attitude(0,1),1);
 });
 test('war declaration consumes one action, changes only the declaring player and rejects repeats or inactive control',()=>{
-  const g=running({humans:2,ai:0});assert.equal(g.declareWar(1).ok,true);assert.equal(g.turn,1);assert.equal(g.currentHuman,1);
+  const g=running({humans:2,ai:0});Object.assign(g.cells[12],{owner:1,army:10});assert.equal(g.declareWar(1).ok,true);assert.equal(g.turn,1);assert.equal(g.currentHuman,1);
   assert.equal(g.attitude(0,1),2);assert.equal(g.attitude(1,0),1);assert.equal(g.attackedBy[1][0],false);
   assert.equal(g.declareWar(1).ok,false);g.waitTurn();assert.equal(g.declareWar(1).ok,false);assert.equal(g.turn,1);
   for(const target of [-1,0,99])assert.equal(g.declareWar(target).ok,false);
@@ -91,7 +92,7 @@ test('all starting countries are neutral in each direction and players can decid
 test('neutral computer initiative has an exact one-percent boundary and cannot reroll within one round',()=>{
   assert.equal(NEUTRAL_ATTACK_CHANCE,.01);
   for(const [value,expected] of [[0,true],[.009999,true],[.01,false],[.099999,false],[.999,false]]){
-    const g=new Game({humans:0,ai:2});g.turn=1;let draws=0;g.rng=()=>{draws++;return value;};
+    const g=new Game({humans:0,ai:2});Object.assign(g.cells[11],{owner:0,army:20});Object.assign(g.cells[12],{owner:1,army:10});g.turn=1;let draws=0;g.rng=()=>{draws++;return value;};
     g.prepareNeutralInitiative(0);assert.equal(g.canAttack(0,1),expected);assert.equal(draws,1);
     for(let i=0;i<20;i++){g.prepareNeutralInitiative(0);g.canAttack(0,1);}assert.equal(draws,1);
     g.turn++;assert.equal(g.canAttack(0,1),false);g.prepareNeutralInitiative(0);assert.equal(draws,2);assert.equal(g.canAttack(0,1),expected);
@@ -104,6 +105,6 @@ test('neutral initiative controls actual AI attacks while retaliation and hostil
     g.cells.forEach(c=>Object.assign(c,{owner:1,army:1,capital:-1}));Object.assign(g.cells[5],{owner:0,army:100});
     const result=g.aiMove(0);assert.equal(!!result?.captured,expected);
   }
-  const g=new Game({humans:0,ai:2});g.relations[0][1]=1;g.attackedBy[0][1]=true;assert.equal(g.canAttack(0,1),true);
+  const g=new Game({humans:0,ai:2});Object.assign(g.cells[11],{owner:0,army:20});Object.assign(g.cells[12],{owner:1,army:10});g.relations[0][1]=1;g.attackedBy[0][1]=true;assert.equal(g.canAttack(0,1),true);
   g.attackedBy[0][1]=false;g.relations[0][1]=2;assert.equal(g.canAttack(0,1),true);
 });

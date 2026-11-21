@@ -13,7 +13,7 @@ test('repeated hostile captures cause no unrest or secession for either player o
   }
 });
 test('only the attacker outgoing attitude decides exemption, before the defender reacts',()=>{
-  const g=running();Object.assign(g.cells[12],{owner:1,army:1});g.relations[0][1]=1;g.relations[1][0]=1;
+  const g=running();Object.assign(g.cells[12],{owner:1,army:1});Object.assign(g.cells[13],{owner:1,army:100});g.relations[0][1]=1;g.relations[1][0]=1;
   const result=g.attack(11,12,0,1);assert.equal(result.captured,true);assert.equal(result.hostileAttack,false);assert.equal(g.attitude(1,0),2);assert.equal(g.unrest(g.cells[12]),1);
   Object.assign(g.cells[13],{owner:1,army:100});g.cells[12].army=1;
   const counter=g.attack(13,12,1,1);assert.equal(counter.hostileAttack,true);assert.equal(counter.captured,true);assert.equal(g.unrest(g.cells[12]),1);

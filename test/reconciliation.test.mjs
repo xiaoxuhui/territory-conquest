@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Game,DIPLOMACY_IMPROVE_CHANCE,SECESSION_ARMY_MULTIPLIER} from '../dist/engine.js';
-function running(options={}){const g=new Game(options);g.running=true;g.turn=1;g.rng=()=>0;g.aiMove=()=>null;return g;}
+// Probability cases use physically touching nations; unseen nations are tested separately.
+function running(options={}){const g=new Game(options);Object.assign(g.cells[12],{owner:1,army:10});if(g.players>2){Object.assign(g.cells[21],{owner:2,army:10});Object.assign(g.cells[22],{owner:2,army:10});}g.running=true;g.turn=1;g.rng=()=>0;g.aiMove=()=>null;return g;}
 test('unequal attitudes reconcile toward the friendlier side for every direction and level',()=>{
   for(const [ab,ba] of [[0,1],[1,0],[0,2],[2,0],[1,2],[2,1]]){
     const g=running();g.relations[0][1]=ab;g.relations[1][0]=ba;const changes=g.resolveDiplomacy();
