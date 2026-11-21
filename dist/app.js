@@ -3,13 +3,13 @@ const $=id=>document.getElementById(id);
 const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 let wins=[];
 try{const saved=JSON.parse(localStorage.getItem('territory-wins')||'[]');if(Array.isArray(saved))wins=saved.filter(n=>Number.isInteger(n)&&n>=0&&n<6);}catch{}
-let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:14,h:10,observerMode:'continuous'};
+let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:14,h:10,observerMode:'continuous',observerSpeed:1};
 let game,selected=null,hovered=null,ratio=.5,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
-let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0;
+let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0,playbackTime=0;
 const flashes=new Map();
 function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
 function setupGame(){
-  game=new Game(currentOptions());selected=null;hovered=null;spectating=game.humans===0;lastController=game.currentHuman;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;
+  game=new Game(currentOptions());selected=null;hovered=null;spectating=game.humans===0;lastController=game.currentHuman;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;playbackTime=0;
   $('resultDialog').close();$('pauseOverlay').hidden=true;
   const l=LEVELS[config.level];
   $('mapTitle').innerHTML=config.mode==='campaign'?`${l.name}<span>${String(config.level+1).padStart(2,'0')}</span>`:'自由征途<span>∞</span>';
@@ -70,7 +70,7 @@ function clickTile(id){
     const result=game.playTurn(selected,id,ratio,{defer:true});
     if(!result.ok){toast(result.reason);return;}
     flashActions(result.actions);
-    lastBattle={action:result,reinforced:0,grew:0};resolutionAt=performance.now()+550;
+    lastBattle={action:result,reinforced:0,grew:0};resolutionAt=playbackTime+550;
     tone(result.captured?680:300);
     if(cell.owner===lastController)selected=id;
     else if(result.amount>0)toast(`派出 ${result.amount}，守军 ${result.toBefore} → ${result.toAfter}；未攻占`);
@@ -83,7 +83,7 @@ function clickTile(id){
 }
 function coord(id){return `${String.fromCharCode(65+id%game.w)}${Math.floor(id/game.w)+1}`;}
 function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.toId,{until:performance.now()+350,captured:a.captured});}
-function waitTurn(){if(game.continuous)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=performance.now()+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
+function waitTurn(){if(game.continuous)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=playbackTime+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
 function advanceResolution(now){
   if(!game.resolving||game.paused||now<resolutionAt)return;
   const phase=game.stepTurn();if(!phase)return;
@@ -108,9 +108,10 @@ function render(){
   const observationName=game.observerMode==='step'?'走一步停一步':'一直走';
   $('observerControls').hidden=!game.automatic;
   document.querySelectorAll('[data-observer-mode]').forEach(b=>{const active=b.dataset.observerMode===game.observerMode;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);b.disabled=game.winner!==null;});
-  $('observerModeNote').textContent=game.observerMode==='step'?'每次点击「推进一回合」，电脑各行动一次并增兵，然后停下。切换时会完成当前回合。':'电脑连续自动运行，可随时暂停，或切换为走一步停一步。';
+  document.querySelectorAll('[data-observer-speed]').forEach(b=>{const active=+b.dataset.observerSpeed===config.observerSpeed;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);b.disabled=game.winner!==null;});
+  $('observerModeNote').textContent=game.observerMode==='step'?`当前 ${config.observerSpeed}×：只加快回合内动画，每次仍只走一回合。切换模式时会完成当前回合。`:`当前 ${config.observerSpeed}×：加快电脑行动和回合间隔，可随时调速或暂停。`;
   document.documentElement.style.setProperty('--accent',faction?.color||FACTIONS[0].color);
-  $('currentPlayer').textContent=game.humans===0?`纯电脑观战 · ${observationName}`:spectating&&game.automatic?`电脑观战 · ${observationName}`:`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
+  $('currentPlayer').textContent=game.humans===0?`纯电脑观战 · ${observationName} · ${config.observerSpeed}×`:spectating&&game.automatic?`电脑观战 · ${observationName} · ${config.observerSpeed}×`:`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
   $('currentPlayer').style.setProperty('--player-color',faction?.color||FACTIONS[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
@@ -184,6 +185,7 @@ $('startBtn').onclick=start;$('pauseBtn').onclick=togglePause;$('resumeBtn').onc
 $('restartBtn').onclick=()=>requestReset(()=>{});
 $('waitBtn').onclick=waitTurn;
 $('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};
+$('observerSpeeds').onclick=e=>{const speed=Number(e.target.dataset.observerSpeed);if(!game.automatic||game.winner!==null||![1,2,4,8].includes(speed))return;config.observerSpeed=speed;render();};
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};
 $('campaignTab').onclick=()=>{if(config.mode!=='campaign')requestReset(()=>config.mode='campaign');};
 $('customTab').onclick=()=>{if(config.mode!=='custom')requestReset(()=>config.mode='custom');};
@@ -220,8 +222,14 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&game.runni
 setupGame();
 function frame(now){
   const dt=Math.min((now-lastFrame)/1000,.1);lastFrame=now;
-  game.update(dt);
-  advanceResolution(now);
+  // One shared playback clock scales both round scheduling and action display.
+  // Human turns always use real time, even after an accelerated observation.
+  const rate=game.automatic?config.observerSpeed:1;
+  const elapsed=dt*rate;
+  if(game.running&&!game.paused&&game.winner===null)playbackTime+=elapsed*1000;
+  let remaining=elapsed;
+  while(remaining>0){const step=Math.min(.25,remaining);game.update(step);remaining-=step;}
+  advanceResolution(playbackTime);
   if(selected!==null&&game.running&&!spectating&&game.cells[selected].owner!==game.currentHuman&&!game.resolving)selected=null;
   checkResult();renderTimer+=dt;
   if(renderTimer>.1){render();renderTimer=0;}
