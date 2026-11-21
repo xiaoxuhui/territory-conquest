@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Game,LEVELS} from '../dist/engine.js';
 // Combat fixtures explicitly begin at war; default peaceful behavior is tested separately.
-function warGame(options){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));return g;}
+function warGame(options){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.resolveDiplomacy=()=>[];return g;}
 function running(){const g=warGame();g.running=true;return g;}
 test('all six levels start every faction with exactly one tile and 20 troops',()=>{
   for(const l of LEVELS){const g=warGame(l);assert.equal(g.cells.length,l.w*l.h);for(const s of g.stats()){assert.equal(s.land,1);assert.equal(s.army,20);}assert.equal(new Set(g.spawns).size,g.ai+1);}
@@ -247,8 +247,7 @@ test('AI waits for enough support to survive a counterattack and uses half when 
 test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
   for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
     const g=warGame({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
-    // This scenario keeps all new states at war. Hostile-front priority now
-    // finishes the largest reproduced normal seed in 11833 rounds.
+    // Keep all new states at war for this bounded conquest regression.
     while(g.winner===null&&g.turn<12000){g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.waitTurn();}
     assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
     assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);

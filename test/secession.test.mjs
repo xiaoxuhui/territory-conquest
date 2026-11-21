@@ -7,19 +7,19 @@ function flip(g){
   Object.assign(source,{owner,army:100});target.army=1;
   assert.equal(g.attack(source.id,12,owner,1).captured,true);
 }
-test('four recent hostile takeovers form a country at round end with no extra army or same-round action',()=>{
+test('four recent hostile takeovers form a country with tenfold armies and no same-round action',()=>{
   const g=running();Object.assign(g.cells[12],{owner:0,army:1});const calls=[];g.aiMove=id=>{calls.push(id);return null;};
   for(let i=0;i<UNREST_LIMIT-1;i++){flip(g);g.waitTurn();assert.equal(g.players,2);}
   flip(g);assert.equal(g.unrest(g.cells[12]),4);assert.equal(g.players,2);const army=g.cells[12].army;
   calls.length=0;g.waitTurn();assert.deepEqual(calls,[1]);assert.equal(g.players,3);assert.equal(g.ai,2);assert.equal(g.cells[12].owner,2);
-  assert.equal(g.cells[12].army,army+1);assert.equal(g.isCapital(g.cells[12]),true);assert.equal(g.stats()[2].rebel,true);assert.equal(g.unrest(g.cells[12]),0);
+  assert.equal(g.cells[12].army,(army+1)*10);assert.equal(g.isCapital(g.cells[12]),true);assert.equal(g.stats()[2].rebel,true);assert.equal(g.unrest(g.cells[12]),0);
   assert.equal(g.aiPlans[2],null);assert.equal(g.aiAnchors[2],12);assert.match(g.events.find(e=>e.kind==='secession').text,/成立新国1/);
   calls.length=0;g.waitTurn();assert.deepEqual([...calls].sort(),[1,2]);
 });
 test('repeated large friendly troop withdrawals cause secession but half transfers and attacks do not',()=>{
   const g=running();Object.assign(g.cells[12],{owner:0,army:10});
   for(let i=0;i<4;i++)assert.equal(g.playTurn(11,12,1).ok,true);
-  assert.equal(g.secessions,1);assert.equal(g.cells[11].owner,2);assert.equal(g.cells[11].army,4);assert.equal(g.capitalLost[0],true);assert.equal(g.cells[12].owner,0);
+  assert.equal(g.secessions,1);assert.equal(g.cells[11].owner,2);assert.equal(g.cells[11].army,40);assert.equal(g.capitalLost[0],true);assert.equal(g.cells[12].owner,0);
   const safe=running();Object.assign(safe.cells[12],{owner:0,army:10});
   for(let i=0;i<8;i++){safe.cells[11].army=100;safe.playTurn(11,12,.5);}
   assert.equal(safe.unrest(safe.cells[11]),0);assert.equal(safe.secessions,0);
@@ -33,12 +33,13 @@ test('unrest expires after quiet rounds and does not advance from real-time thin
   g.paused=true;for(let i=0;i<10;i++)g.waitTurn();assert.equal(g.unrest(g.cells[12]),3);g.paused=false;
   for(let i=0;i<UNREST_WINDOW;i++)g.waitTurn();assert.equal(g.unrest(g.cells[12]),0);assert.equal(g.secessions,0);
 });
-test('one small country contains only connected restless land and preserves its total troops',()=>{
+test('one small country contains only connected restless land and multiplies each joining tile by ten',()=>{
   const g=running();
   for(const [id,count] of [[22,4],[21,2],[23,2],[32,2],[20,0]])Object.assign(g.cells[id],{owner:0,army:10,unrestEvents:Array.from({length:count},()=>({turn:0,kind:'capture'}))});
   Object.assign(g.cells[12],{owner:1,army:12,unrestEvents:[{turn:0,kind:'capture'},{turn:0,kind:'capture'}]});
   const total=g.stats().reduce((sum,s)=>sum+s.army,0),result=g.resolveSecessions();assert.equal(result.length,1);assert.equal(result[0].cells.length,3);
-  assert.equal(g.cells[12].owner,1);assert.equal(g.cells[20].owner,0);assert.equal(g.cells[32].owner,0);assert.equal(g.stats().reduce((sum,s)=>sum+s.army,0),total);
+  assert.equal(g.cells[12].owner,1);assert.equal(g.cells[20].owner,0);assert.equal(g.cells[32].owner,0);assert.equal(g.stats().reduce((sum,s)=>sum+s.army,0),total+270);
+  for(const id of result[0].cells)assert.equal(g.cells[id].army,100);assert.equal(g.cells[20].army,10);assert.equal(g.cells[12].army,12);
   assert.equal(g.capitals(2).length,1);for(const id of result[0].cells)assert.equal(g.cells[id].stableUntil,SECESSION_GRACE);
 });
 test('new countries have a stability grace period and can later split under the same rules',()=>{

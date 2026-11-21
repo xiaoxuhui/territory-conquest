@@ -19,6 +19,7 @@ export const LEVELS = [
 export const UNREST_LIMIT=4,UNREST_WINDOW=8,SECESSION_GRACE=12;
 export const ATTITUDES=['和平','中立','敌对'];
 export const NEUTRAL_ATTACK_CHANCE=.1;
+export const DIPLOMACY_IMPROVE_CHANCE=.1,SECESSION_ARMY_MULTIPLIER=10;
 function newCountry(id,number){
   const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
   const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});
@@ -34,6 +35,7 @@ export class Game {
     this.relations=Array.from({length:players},(_,owner)=>Array.from({length:players},(_,other)=>owner===other?0:1));
     this.attackedBy=Array.from({length:players},()=>Array(players).fill(false));
     this.neutralInitiative=Array(players).fill(null);
+    this.diplomacySettledTurn=-1;
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,homeland:-1,army:0,capital:-1,unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
     const places=[this.w+1];
@@ -67,6 +69,23 @@ export class Game {
   canAttack(from,to){return to<0||from===to||this.attitude(from,to)===2||(this.attitude(from,to)===1&&(this.isHuman(from)||this.attackedBy[from]?.[to]===true||(this.neutralInitiative[from]?.turn===this.turn&&this.neutralInitiative[from].allowed)));}
   prepareNeutralInitiative(owner){
     if(this.neutralInitiative[owner]?.turn!==this.turn)this.neutralInitiative[owner]={turn:this.turn,allowed:this.rng()<NEUTRAL_ATTACK_CHANCE};
+  }
+  resolveDiplomacy(){
+    if(!this.running||this.paused||this.winner!==null||this.turn<1||this.diplomacySettledTurn===this.turn)return [];
+    this.diplomacySettledTurn=this.turn;
+    const alive=this.stats().filter(s=>s.land).map(s=>s.id),changes=[];
+    for(let i=0;i<alive.length;i++)for(let j=i+1;j<alive.length;j++){
+      const a=alive[i],b=alive[j],ab=this.attitude(a,b),ba=this.attitude(b,a);
+      if(ab===0&&ba===0)continue;
+      if(this.rng()>=DIPLOMACY_IMPROVE_CHANCE)continue;
+      // Lower stored index means friendlier: peace > neutral > hostile.
+      const next=ab===ba?Math.max(0,ab-1):Math.min(ab,ba);
+      this.relations[a][b]=next;this.relations[b][a]=next;
+      this.aiPlans[a]=null;this.aiPlans[b]=null;
+      changes.push({a,b,beforeAB:ab,beforeBA:ba,after:next});
+      this.addEvent(`${this.factions[a].name}与${this.factions[b].name}关系缓和：${ATTITUDES[ab]} / ${ATTITUDES[ba]} → 双方${ATTITUDES[next]}`,'diplomacy-improve',a);
+    }
+    return changes;
   }
   reactToAttack(attacker,defender){
     this.attackedBy[defender][attacker]=true;
@@ -116,13 +135,14 @@ export class Game {
       if(cause==='war')this.relations[owner][homeland]=0;
       for(const enemy of enemies)this.relations[owner][enemy]=2;
       this.capitalLost.push(false);this.aiPlans.push(null);this.aiAnchors.push(center.id);this.spawns.push(center.id);
-      for(const c of region){c.owner=owner;c.homeland=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
+      const armyChanges=region.map(c=>({id:c.id,before:c.army,after:c.army*SECESSION_ARMY_MULTIPLIER}));
+      for(const c of region){c.army*=SECESSION_ARMY_MULTIPLIER;c.owner=owner;c.homeland=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
       center.capital=owner;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;this.aiPlans[oldOwner]=null;
       const location=`${String.fromCharCode(65+center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
-      this.addEvent(`${location}一带因反复易手或抽调驻军发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，电脑控制）`,'secession',owner);
+      this.addEvent(`${location}一带因反复易手或抽调驻军发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，原格兵力 ×${SECESSION_ARMY_MULTIPLIER}，电脑控制）`,'secession',owner);
       this.addEvent(cause==='drain'?`${this.factions[owner].name}因持续被抽调驻军，对${this.factions[oldOwner].name}保持敌对`:`${this.factions[owner].name}因战乱独立，对原属国${this.factions[homeland].name}保持和平${enemies.size?`，敌视进攻者${[...enemies].map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
-      countries.push({owner,oldOwner,homeland,cause,capital:center.id,cells:region.map(c=>c.id)});
+      countries.push({owner,oldOwner,homeland,cause,capital:center.id,cells:region.map(c=>c.id),armyChanges});
     }
     return countries;
   }
@@ -253,9 +273,9 @@ export class Game {
         changes.push({id:c.id,owner:c.owner,before,after:c.army,amount:c.army-before});
       }
     });
-    const secessions=this.resolveSecessions();
+    const diplomacy=this.resolveDiplomacy(),secessions=this.resolveSecessions();
     this.pendingTurn=null;this.roundState=null;this.currentHuman=this.aliveHumans()[0]??null;
-    this.checkWinner();return {kind:'growth',changes,secessions};
+    this.checkWinner();return {kind:'growth',changes,secessions,diplomacy};
   }
   update(dt){
     if(!this.running||this.paused||this.winner!==null)return [];

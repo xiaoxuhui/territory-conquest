@@ -12,10 +12,10 @@ const errors=[],checks=[];let browser;
     const file=path.join(root,pathname==='/'?'index.html':pathname);
     if(!fs.existsSync(file))return route.fulfill({status:404,body:''});
     let body=fs.readFileSync(file);
-    // These existing combat/turn UI scenarios begin with declared hostilities.
+    // These existing combat/turn UI scenarios keep declared hostilities fixed.
     // Default peace, declaration and retaliation UI are covered in qa/check-peace-rules.cjs.
     if(pathname==='/engine.js')body=Buffer.from(body.toString().replace('this.relations=Array.from({length:players},(_,owner)=>Array.from({length:players},(_,other)=>owner===other?0:1));','this.relations=Array.from({length:players},(_,owner)=>Array.from({length:players},(_,other)=>owner===other?0:2));'));
-    if(pathname==='/app.js')body=Buffer.from(body.toString()+`\nglobalThis.__qa={get game(){return game},render,checkResult};`);
+    if(pathname==='/app.js')body=Buffer.from(body.toString()+`\nGame.prototype.resolveDiplomacy=()=>[];globalThis.__qa={get game(){return game},render,checkResult};`);
     await route.fulfill({status:200,body,contentType:({'.html':'text/html','.js':'text/javascript','.css':'text/css'})[path.extname(file)]||'application/octet-stream'});
   });
   const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));await p.goto('http://territory.test/');await p.waitForSelector('.cell');

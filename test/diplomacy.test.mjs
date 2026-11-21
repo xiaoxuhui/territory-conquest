@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Game,ATTITUDES,NEUTRAL_ATTACK_CHANCE} from '../dist/engine.js';
-function running(options={}){const g=new Game(options);g.running=true;g.aiMove=()=>null;return g;}
+// Isolate immediate attack/declaration rules from probabilistic round-end reconciliation.
+function running(options={}){const g=new Game(options);g.running=true;g.aiMove=()=>null;g.resolveDiplomacy=()=>[];return g;}
 function flip(g){const owner=1-g.cells[12].owner,source=owner===0?11:13;g.relations[owner][1-owner]=2;Object.assign(g.cells[source],{owner,army:100});g.cells[12].army=1;assert.equal(g.attack(source,12,owner,1).captured,true);}
 test('attacked country alone changes from peace to neutral to hostile, including unsuccessful attacks',()=>{
   const g=running();Object.assign(g.cells[12],{owner:1,army:1000});
