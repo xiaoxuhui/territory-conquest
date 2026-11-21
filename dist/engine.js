@@ -17,6 +17,7 @@ export const LEVELS = [
   {name:'天下归一',subtitle:'征服最后一片疆土',w:20,h:13,ai:7}
 ];
 export const UNREST_LIMIT=4,UNREST_WINDOW=8,SECESSION_GRACE=12;
+export const ATTITUDES=['和平','中立','敌对'];
 function newCountry(id,number){
   const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
   const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});
@@ -29,7 +30,8 @@ export class Game {
     if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(humans)||humans<0||!Number.isInteger(ai)||ai<0||players<1||players>8||players>(w-2)*(h-2)) throw new Error('人类与电脑合计需为 1–8 位，且地图必须能容纳所有玩家');
     this.w=w;this.h=h;this.humans=humans;this.ai=ai;this.players=players;this.currentHuman=humans?0:null;this.difficulty=difficulty;this.rng=seededRandom(seed);
     this.factions=FACTIONS.slice(0,players);this.secessions=0;
-    this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1,unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);
+    this.relations=Array.from({length:players},()=>Array(players).fill(0));
+    this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,homeland:-1,army:0,capital:-1,unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
     const places=[this.w+1];
     while(places.length<players) {
@@ -43,7 +45,7 @@ export class Game {
     }
     this.spawns=places;
     this.aiPlans=Array(players).fill(null);this.aiAnchors=[...places];
-    places.forEach((id,owner)=>Object.assign(this.cells[id],{owner,army:20,capital:owner}));
+    places.forEach((id,owner)=>Object.assign(this.cells[id],{owner,homeland:owner,army:20,capital:owner}));
     this.addEvent('所有阵营已就位，从一格开始。','system');
   }
   neighbors(id){const x=id%this.w,y=Math.floor(id/this.w);return [x>0?id-1:-1,x<this.w-1?id+1:-1,y>0?id-this.w:-1,y<this.h-1?id+this.w:-1].filter(i=>i>=0);}
@@ -58,13 +60,20 @@ export class Game {
     this.observerMode=mode;this.automaticElapsed=0;
   }
   stats(){return this.factions.map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
+  attitude(from,to){return this.relations[from]?.[to]??0;}
+  reactToAttack(attacker,defender){
+    const before=this.attitude(defender,attacker),after=Math.min(2,before+1);
+    if(after===before)return;
+    this.relations[defender][attacker]=after;this.aiPlans[defender]=null;
+    this.addEvent(`${this.factions[defender].name}对${this.factions[attacker].name}的态度：${ATTITUDES[before]} → ${ATTITUDES[after]}（遭到进攻）`,'diplomacy',defender);
+  }
   unrest(cell){return cell&&this.turn>=cell.stableUntil?cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW).length:0;}
-  recordUnrest(cell,kind){
+  recordUnrest(cell,kind,details={}){
     if(this.turn<cell.stableUntil)return;
     cell.unrestEvents=cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW);
     const turn=this.roundState?this.turn:this.turn+1;
     if(kind==='drain'&&cell.unrestEvents.some(e=>e.kind===kind&&e.turn===turn))return;
-    cell.unrestEvents.push({turn,kind});
+    cell.unrestEvents.push({turn,kind,...details});
   }
   resolveSecessions(){
     if(!this.running||this.paused||this.winner!==null)return [];
@@ -76,14 +85,23 @@ export class Game {
       for(let q=0;q<region.length&&region.length<3;q++)for(const id of this.neighbors(region[q].id)){
         const c=this.cells[id];if(region.length<3&&c.owner===oldOwner&&this.unrest(c)>=2&&!region.includes(c))region.push(c);
       }
-      const owner=this.players++;this.ai++;this.factions.push(newCountry(owner,++this.secessions));
+      const history=region.flatMap(c=>c.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW));
+      const local=center.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW),drains=local.filter(e=>e.kind==='drain').length;
+      const cause=drains>0&&drains>=local.length-drains?'drain':'war';
+      const homeland=cause==='drain'?oldOwner:center.homeland>=0?center.homeland:local.find(e=>Number.isInteger(e.victim))?.victim??oldOwner;
+      const owner=this.players++;this.ai++;this.factions.push({...newCountry(owner,++this.secessions),origin:homeland,cause});
+      this.relations.forEach(row=>row.push(0));this.relations.push(Array(this.players).fill(0));
+      const enemies=new Set(history.filter(e=>e.kind===(cause==='drain'?'drain':'capture')&&Number.isInteger(e.actor)).map(e=>e.actor));
+      if(cause==='drain')enemies.add(oldOwner);else enemies.delete(homeland);
+      for(const enemy of enemies)this.relations[owner][enemy]=2;
       this.capitalLost.push(false);this.aiPlans.push(null);this.aiAnchors.push(center.id);this.spawns.push(center.id);
-      for(const c of region){c.owner=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
+      for(const c of region){c.owner=owner;c.homeland=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
       center.capital=owner;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;this.aiPlans[oldOwner]=null;
       const location=`${String.fromCharCode(65+center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
       this.addEvent(`${location}一带因反复易手或抽调驻军发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，电脑控制）`,'secession',owner);
+      this.addEvent(cause==='drain'?`${this.factions[owner].name}因持续被抽调驻军，对${this.factions[oldOwner].name}保持敌对`:`${this.factions[owner].name}因战乱独立，对原属国${this.factions[homeland].name}保持和平${enemies.size?`，敌视进攻者${[...enemies].map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
-      countries.push({owner,oldOwner,capital:center.id,cells:region.map(c=>c.id)});
+      countries.push({owner,oldOwner,homeland,cause,capital:center.id,cells:region.map(c=>c.id)});
     }
     return countries;
   }
@@ -96,17 +114,18 @@ export class Game {
     const amount=this.sent(from,ratio);
     if(amount<1)return {ok:false,reason:'兵力不足，至少留守 1 名士兵'};
     const oldOwner=to.owner,fromBefore=from.army,toBefore=to.army;from.army-=amount;
+    if(oldOwner>=0&&oldOwner!==owner){if(to.homeland<0)to.homeland=oldOwner;this.reactToAttack(owner,oldOwner);}
     let captured=false;
     if(to.owner===owner)to.army+=amount;
-    else if(amount>to.army){to.army=amount-to.army;to.owner=owner;captured=true;}
+    else if(amount>to.army){to.army=amount-to.army;to.owner=owner;captured=true;if(oldOwner<0)to.homeland=owner;}
     else to.army-=amount;
     if(captured&&oldOwner>=0&&to.capital===oldOwner){
       to.capital=-1;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;
       this.addEvent(`${this.factions[oldOwner].name}首都被攻占，原首都失效`,'capital-lost',oldOwner);
     }
     const kind=oldOwner===owner?'reinforce':'attack';
-    if(captured&&oldOwner>=0)this.recordUnrest(to,'capture');
-    if(kind==='reinforce'&&amount>=3&&amount/fromBefore>=.75)this.recordUnrest(from,'drain');
+    if(captured&&oldOwner>=0)this.recordUnrest(to,'capture',{actor:owner,victim:oldOwner});
+    if(kind==='reinforce'&&amount>=3&&amount/fromBefore>=.75)this.recordUnrest(from,'drain',{actor:owner});
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${this.factions[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
     else if(oldOwner>=0)this.addEvent(`${this.factions[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);
@@ -267,6 +286,7 @@ export class Game {
           const required=to.army+threat+2;
           score=100+(from.army-1>=required?80:0)+(from.id===this.aiAnchors[owner]?60:0)
             +30/Math.max(1,counts[to.owner])+(this.isCapital(to)?8:0)
+            +this.attitude(owner,to.owner)*18
             -Math.log1p(required)*8+Math.log1p(from.army)*6;
         }
         score+=this.rng()*(this.difficulty==='easy'?16:this.difficulty==='hard'?1:4);

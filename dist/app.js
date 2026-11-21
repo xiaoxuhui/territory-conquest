@@ -1,4 +1,4 @@
-import {Game,LEVELS,UNREST_LIMIT} from './engine.js';
+import {Game,LEVELS,UNREST_LIMIT,ATTITUDES} from './engine.js';
 const $=id=>document.getElementById(id);
 const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 let wins=[];
@@ -198,7 +198,16 @@ function render(){
   $('territoryShare').innerHTML=stats.filter(s=>s.land).map(s=>`<i style="width:${s.land/total*100}%;background:${s.color}"></i>`).join('')+`<i style="width:${neutral/total*100}%;background:#46523a"></i>`;
   const logKey=game.events.map(e=>e.text+e.time).join('|');
   if(logKey!==lastLog){lastLog=logKey;$('battleLog').innerHTML=game.events.slice(0,5).map(e=>`<div class="log-item" ${e.owner>=0?`style="border-color:${game.factions[e.owner].color}66"`:''}><time>${formatTime(e.time)}</time><p>${e.text}</p></div>`).join('');}
-  renderIntel();renderBattleResult();
+  renderDiplomacy(stats);renderIntel();renderBattleResult();
+}
+function renderDiplomacy(stats=game.stats()){
+  const select=$('diplomacyFrom'),alive=stats.filter(s=>s.land),previous=select.value;
+  const options=alive.map(s=>`<option value="${s.id}">${s.name}${s.human?' · 玩家 '+(s.id+1):''}</option>`).join('');
+  if(select.innerHTML!==options){select.innerHTML=options;select.value=alive.some(s=>String(s.id)===previous)?previous:String(game.currentHuman??alive[0]?.id??0);}
+  const from=Number(select.value),nation=game.factions[from];
+  const rows=alive.filter(s=>s.id!==from).map(s=>`<div class="diplomacy-row" data-relation-target="${s.id}"><strong style="color:${s.color}">${s.name}</strong><span>${nation.name}对${s.name}<b class="attitude attitude-${game.attitude(from,s.id)}" data-direction="out">${ATTITUDES[game.attitude(from,s.id)]}</b></span><span>${s.name}对${nation.name}<b class="attitude attitude-${game.attitude(s.id,from)}" data-direction="in">${ATTITUDES[game.attitude(s.id,from)]}</b></span></div>`).join('')||'<p class="diplomacy-empty">当前没有其他存活国家。</p>';
+  if($('diplomacyList').innerHTML!==rows)$('diplomacyList').innerHTML=rows;
+  $('diplomacyOrigin').textContent=nation.rebel?`因${nation.cause==='drain'?'持续抽调驻军':'战乱'}独立，原属国：${game.factions[nation.origin].name}`:'初始国家，各方向态度独立变化。';
 }
 function renderIntel(){
   const id=hovered??selected;if(id===null){$('tileIntel').innerHTML='<div class="intel-placeholder">◇</div><p>选择一块领土<br><span>查看兵力与进攻信息</span></p>';return;}
@@ -208,6 +217,7 @@ function renderIntel(){
     const sent=game.sent(game.cells[selected],ratio);note=c.owner===lastController?`调兵：可增援 ${sent} 兵力`:sent>c.army?`可攻占 · 出兵后剩余 ${sent-c.army}`:`守军 ${c.army} · 可出兵 ${sent}`;
   }
   if(c.owner>=0)note+=game.turn<c.stableUntil?` · 新国稳定期 ${c.stableUntil-game.turn} 回合`:` · 动荡 ${game.unrest(c)}/${UNREST_LIMIT}${game.unrest(c)>=2?'，注意分裂风险':''}`;
+  if(c.owner>=0&&lastController!==null&&c.owner!==lastController)note+=` · 对${game.factions[lastController].name}${ATTITUDES[game.attitude(c.owner,lastController)]}，反向${ATTITUDES[game.attitude(lastController,c.owner)]}`;
   $('tileIntel').innerHTML=`<div class="tile-preview" style="${f?`color:${f.color};border-color:${f.color}77;background:rgba(${f.rgb},.15)`:'background:#2e3d27;border-color:#596d48;color:#a3b68c'}">${c.owner>=0?c.army:'◇'}</div><div class="tile-detail"><div class="coordinate">${coord(id)}<span>${f?f.symbol:''}</span></div><strong>${f?(c.owner===lastController?'你的领土':f.name+'阵营'):'未占领的土地'}</strong><p class="intel-note">${note}</p></div>`;
 }
 function checkResult(){
@@ -229,6 +239,7 @@ $('restartBtn').onclick=()=>requestReset(()=>{});
 $('waitBtn').onclick=waitTurn;
 $('moveCapitalBtn').onclick=moveCapital;
 $('buildCapitalBtn').onclick=buildCapital;
+$('diplomacyFrom').onchange=()=>renderDiplomacy();
 $('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};
 $('observerSpeeds').onclick=e=>{const speed=Number(e.target.dataset.observerSpeed);if(!game.automatic||game.winner!==null||![1,2,4,8].includes(speed))return;config.observerSpeed=speed;render();};
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};
