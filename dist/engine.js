@@ -35,6 +35,7 @@ export class Game {
       places.push(best);
     }
     this.spawns=places;
+    this.aiPlans=Array(players).fill(null);this.aiAnchors=[...places];
     places.forEach((id,owner)=>Object.assign(this.cells[id],{owner,army:20,capital:owner}));
     this.addEvent('所有阵营已就位，从一格开始。','system');
   }
@@ -143,40 +144,79 @@ export class Game {
     return [];
   }
   aiMove(owner){
+    if(!this.running||this.paused||this.winner!==null)return null;
     const owned=this.cells.filter(c=>c.owner===owner);if(!owned.length)return null;
-    const options=[];
+    const counts=Array(this.players).fill(0);this.cells.forEach(c=>{if(c.owner>=0)counts[c.owner]++;});
+    const fronts=[];
     for(const c of owned){
-      if(c.army<2)continue;
       for(const n of this.neighbors(c.id)){
-        const t=this.cells[n];if(t.owner===owner)continue;
-        if(c.army-1>t.army){
-          const empty=t.owner===-1;
-          const ratio=empty?0.5:1;
-          const open=this.neighbors(n).filter(i=>this.cells[i].owner!==owner).length;
-          let score=empty?3+open*0.4:5+(c.army-t.army)*0.025;
-          if(t.capital===t.owner&&t.owner>=0)score+=2;
-          if(this.difficulty==='easy')score=this.rng()*10;
-          else score+=this.rng()*(this.difficulty==='hard'?0.5:2);
-          options.push({from:c.id,to:n,ratio,score});
+        if(this.cells[n].owner!==owner)fronts.push({rally:c.id,target:n});
+      }
+    }
+    if(!fronts.length)return null;
+    const neutral=fronts.filter(f=>this.cells[f.target].owner===-1);
+    let plan=this.aiPlans[owner];
+    const invalid=!plan||this.cells[plan.rally].owner!==owner||this.cells[plan.target].owner===owner;
+    const expansionAvailable=neutral.length&&(!plan||this.cells[plan.target].owner!==-1);
+    if(invalid||expansionAvailable||plan.age>=Math.max(128,this.cells.length)){
+      const candidates=neutral.length?neutral:fronts;
+      let best=null,bestScore=-Infinity;
+      for(const f of candidates){
+        const from=this.cells[f.rally],to=this.cells[f.target];
+        const adjacent=this.neighbors(to.id),threat=this.aiThreat(to.id,owner);
+        let score;
+        if(to.owner===-1){
+          // Complete reachable expansion, including the final isolated blank.
+          score=(from.army>=2?100:0)+adjacent.filter(n=>this.cells[n].owner===-1).length*3+Math.min(from.army,30)*.1;
+        }else{
+          const required=to.army+threat+2;
+          score=100+(from.army-1>=required?80:0)+(from.id===this.aiAnchors[owner]?60:0)
+            +30/Math.max(1,counts[to.owner])+(to.capital===to.owner?8:0)
+            -Math.log1p(required)*8+Math.log1p(from.army)*6;
         }
+        score+=this.rng()*(this.difficulty==='easy'?16:this.difficulty==='hard'?1:4);
+        if(score>bestScore){bestScore=score;best=f;}
       }
+      plan={...best,age:0};this.aiPlans[owner]=plan;
     }
-    // Interior armies travel toward the frontier; frontier allies reinforce a stronger attack.
-    const dist=new Map(),queue=[];
-    owned.forEach(c=>{if(this.neighbors(c.id).some(n=>this.cells[n].owner!==owner)){dist.set(c.id,0);queue.push(c.id);}});
-    for(let q=0;q<queue.length;q++){const id=queue[q];for(const n of this.neighbors(id))if(this.cells[n].owner===owner&&!dist.has(n)){dist.set(n,dist.get(id)+1);queue.push(n);}}
-    if(this.difficulty!=='easy'||!options.length){
-      for(const c of owned){
-        if(c.army<4)continue;
-        const d=dist.get(c.id);
-        const destinations=this.neighbors(c.id).filter(n=>this.cells[n].owner===owner&&((dist.get(n)<d)||(d===0&&dist.get(n)===0&&this.cells[n].army>c.army)));
-        if(!destinations.length)continue;
-        destinations.sort((a,b)=>dist.get(a)-dist.get(b)||this.cells[b].army-this.cells[a].army);
-        options.push({from:c.id,to:destinations[0],ratio:1,score:(options.length?1:4)+Math.min(5,c.army/12)+(d>0?1:0)});
-      }
+    plan.age++;
+    // Keep the target, but use a substantially stronger adjacent launch tile.
+    for(const n of this.neighbors(plan.target))if(this.cells[n].owner===owner&&this.cells[n].army>this.cells[plan.rally].army*1.5+4)plan.rally=n;
+    const from=this.cells[plan.rally],to=this.cells[plan.target];
+    const safety=this.difficulty==='easy'?.6:this.difficulty==='hard'?1.1:1;
+    const reserve=to.owner===-1?0:Math.max(1,Math.ceil(this.aiThreat(to.id,owner)*safety));
+    const required=to.army+reserve+1;
+    let ratio=null;
+    if(to.owner===-1&&this.sent(from,.5)>0)ratio=.5;
+    else if(this.sent(from,.5)>=required)ratio=.5;
+    else if(this.sent(from,1)>=required)ratio=1;
+    if(ratio!==null){
+      const result=this.attack(from.id,to.id,owner,ratio);
+      if(result.ok&&result.captured){this.aiAnchors[owner]=to.id;this.aiPlans[owner]=null;}
+      return result;
     }
-    options.sort((a,b)=>b.score-a.score);
-    if(!options.length)return null;
-    const move=options[0];return this.attack(move.from,move.to,owner,move.ratio);
+    // Rally on one front. Every transfer strictly reduces distance to that
+    // rally, so interior armies cannot circulate between unrelated borders.
+    const dist=new Int16Array(this.cells.length).fill(-1),queue=[plan.rally];dist[plan.rally]=0;
+    for(let q=0;q<queue.length;q++)for(const n of this.neighbors(queue[q]))if(this.cells[n].owner===owner&&dist[n]===-1){dist[n]=dist[queue[q]]+1;queue.push(n);}
+    let transfer=null,transferScore=-Infinity;
+    for(const c of owned){
+      if(c.id===plan.rally||c.army<4||dist[c.id]<1)continue;
+      const next=this.neighbors(c.id).filter(n=>this.cells[n].owner===owner&&dist[n]===dist[c.id]-1)
+        .sort((a,b)=>this.cells[b].army-this.cells[a].army)[0];
+      if(next===undefined)continue;
+      const danger=this.aiThreat(c.id,owner);
+      const sendRatio=danger>0&&c.army-this.sent(c,.5)>danger?.5:1;
+      const amount=this.sent(c,sendRatio),score=amount/(dist[c.id]+.75);
+      if(score>transferScore){transferScore=score;transfer={from:c.id,to:next,ratio:sendRatio};}
+    }
+    return transfer?this.attack(transfer.from,transfer.to,owner,transfer.ratio):null;
+  }
+  aiThreat(id,owner){
+    let threat=0;
+    for(const n of this.neighbors(id)){
+      const c=this.cells[n];if(c.owner>=0&&c.owner!==owner)threat=Math.max(threat,c.army-1);
+    }
+    return threat;
   }
 }

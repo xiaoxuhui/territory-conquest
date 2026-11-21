@@ -38,7 +38,7 @@ function renderSettings(){
   $('completedLabel').textContent=`${wins.length} / 6 完成`;
   $('levelList').innerHTML=LEVELS.map((l,i)=>`<button class="level ${config.level===i?'active':''}" data-level="${i}" aria-pressed="${config.level===i}"><span class="level-num">${String(i+1).padStart(2,'0')}</span><span><span class="level-title">${l.name}</span><span class="level-details">${l.w} × ${l.h} · ${l.ai} 位电脑</span></span>${wins.includes(i)?'<span class="level-check" aria-label="已通关">✓</span>':''}</button>`).join('');
   document.querySelectorAll('[data-diff]').forEach(el=>{el.classList.toggle('active',el.dataset.diff===config.difficulty);el.setAttribute('aria-pressed',el.dataset.diff===config.difficulty);});
-  const copy={easy:['从容练习','电脑随机选择可行进攻。你思考时，对手不动。'],normal:['均衡决策','电脑会扩张与集结。每回合最多行动一次。'],hard:['谋定而动','电脑更善于选择目标，每回合仍只行动一次。']}[config.difficulty];
+  const copy={easy:['基础扩张','电脑优先扩张并简单集结，较少判断反击风险。'],normal:['集中推进','先补齐空地，再集结兵力，从能守住的突破口推进。'],hard:['稳健进攻','更谨慎估算反击风险，持续向突破口集结兵力。']}[config.difficulty];
   $('difficultyTag').textContent=copy[0];$('difficultyDesc').textContent=copy[1];
   $('humanCount').textContent=config.humans;$('aiCount').textContent=config.ai;
   const total=config.humans+config.ai;
@@ -48,7 +48,7 @@ function renderSettings(){
   $('mapSize').value=`${config.w},${config.h}`;
   $('difficulty').querySelectorAll('button').forEach(b=>b.disabled=game.ai===0);
   if(game.ai===0){$('difficultyTag').textContent='无电脑';$('difficultyDesc').textContent='当前没有电脑对手，难度设置不影响人类玩家。';}
-  else if(game.humans===0)$('difficultyDesc').textContent=game.observerMode==='step'?'每次推进一回合，每个电脑最多行动一次，然后停下。':'电脑将连续自动对战，每轮各行动一次，可随时暂停。';
+  else if(game.humans===0)$('difficultyDesc').textContent=game.observerMode==='step'?'电脑先扩张、再集结推进；每次结算一回合，然后停下。':'电脑先扩张、再集结推进，每轮各行动一次，可随时暂停。';
 }
 function requestReset(fn){
   if(game.running&&game.winner===null&&!resultShown){resetWasPaused=game.paused;game.paused=true;pendingReset=fn;$('confirmDialog').showModal();render();}

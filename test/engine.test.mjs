@@ -214,3 +214,39 @@ test('observation switches reset timing, respect pause and never automate live h
     for(let i=0;i<100;i++)human.update(.25);assert.equal(human.turn,0);assert.equal(human.continuous,false);
   }
 });
+test('AI claims the final neutral tile instead of endlessly shuffling interior armies',()=>{
+  const g=new Game({humans:0,ai:1});g.running=true;
+  g.cells.forEach(c=>Object.assign(c,{owner:0,army:999,capital:-1}));
+  Object.assign(g.cells[79],{owner:-1,army:0});
+  const action=g.aiMove(0);assert.equal(action.toId,79);assert.equal(action.captured,true);assert.equal(g.winner,0);
+});
+test('AI expands into a reachable blank before opportunistically taking a weak enemy tile',()=>{
+  const g=new Game({w:6,h:6,humans:0,ai:2});g.running=true;
+  g.cells.forEach(c=>Object.assign(c,{owner:1,army:50,capital:-1}));
+  Object.assign(g.cells[7],{owner:0,army:100});Object.assign(g.cells[8],{owner:-1,army:0});g.cells[6].army=1;
+  const action=g.aiMove(0);assert.equal(action.toId,8);assert.equal(action.oldOwner,-1);assert.equal(action.amount,50);
+});
+test('AI routes an interior army toward one rally point without sending it back',()=>{
+  const g=new Game({w:5,h:4,humans:0,ai:2});g.running=true;
+  g.cells.forEach(c=>Object.assign(c,{owner:1,army:1000,capital:-1}));
+  for(const id of [10,11,12,13])Object.assign(g.cells[id],{owner:0,army:1});g.cells[10].army=100;g.cells[13].army=4;g.cells[14].army=50;
+  g.aiPlans[0]={rally:13,target:14,age:0};
+  for(const [from,to] of [[10,11],[11,12],[12,13]]){
+    const action=g.aiMove(0);assert.equal(action.kind,'reinforce');assert.equal(action.fromId,from);assert.equal(action.toId,to);assert.equal(g.aiPlans[0].target,14);
+  }
+});
+test('AI waits for enough support to survive a counterattack and uses half when sufficient',()=>{
+  const g=new Game({w:4,h:4,humans:0,ai:2});g.running=true;
+  g.cells.forEach(c=>Object.assign(c,{owner:0,army:1,capital:-1}));
+  Object.assign(g.cells[13],{owner:0,army:4});Object.assign(g.cells[14],{owner:1,army:5});Object.assign(g.cells[15],{owner:1,army:3});
+  g.aiPlans[0]={rally:13,target:14,age:0};assert.equal(g.aiMove(0),null);assert.equal(g.cells[14].army,5);
+  g.cells[13].army=40;const action=g.aiMove(0);assert.equal(action.amount,20);assert.equal(action.captured,true);assert.equal(g.cells[13].army,20);assert.equal(g.cells[14].army,15);
+});
+test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
+  for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
+    const g=new Game({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
+    while(g.winner===null&&g.turn<6000)g.waitTurn();
+    assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
+    assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);
+  }
+});
