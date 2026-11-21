@@ -65,7 +65,7 @@ export class Game {
     else to.army-=amount;
     if(captured&&oldOwner>=0&&to.capital===oldOwner){
       this.capitalLost[oldOwner]=true;to.capital=-1;
-      this.addEvent(`${FACTIONS[oldOwner].name}首都被攻占，永久失去首都`,'capital-lost',oldOwner);
+      this.addEvent(`${FACTIONS[oldOwner].name}首都被攻占，原首都失效`,'capital-lost',oldOwner);
     }
     const kind=oldOwner===owner?'reinforce':'attack';
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
@@ -81,9 +81,27 @@ export class Game {
   }
   checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${FACTIONS[owner].name}占领全图，获得胜利！`,'victory',owner);}}
   get resolving(){return this.pendingTurn!==null;}
+  constructCapital(toId,owner){
+    if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'当前不能建设首都'};
+    const target=this.cells[toId];
+    if(!target||target.owner!==owner)return {ok:false,reason:'首都只能建设在己方领土'};
+    if(this.cells.some(c=>c.owner===owner&&this.isCapital(c)))return {ok:false,reason:'已有首都，不能重复建设，请使用迁都'};
+    this.cells.forEach(c=>{if(c.capital===owner)c.capital=-1;});
+    this.capitalLost[owner]=false;target.capital=owner;this.aiPlans[owner]=null;
+    const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
+    this.addEvent(`${FACTIONS[owner].name}在 ${location} 建设了新首都`,'capital-build',owner);
+    return {ok:true,kind:'capital-build',owner,oldOwner:owner,fromId:-1,toId,amount:0,captured:false};
+  }
+  buildCapital(toId,options={}){
+    if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
+    if(this.currentHuman===null)return {ok:false,reason:'当前没有轮到人类玩家'};
+    const result=this.constructCapital(toId,this.currentHuman);
+    if(result.ok)result.actions=this.finishTurn([{...result}],options);
+    return result;
+  }
   relocateCapital(toId,owner){
     if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'当前不能迁都'};
-    if(this.capitalLost[owner])return {ok:false,reason:'首都已经失守，不能恢复或重新迁都'};
+    if(this.capitalLost[owner])return {ok:false,reason:'当前没有首都，请先建设新首都'};
     const target=this.cells[toId];
     if(!target||target.owner!==owner)return {ok:false,reason:'首都只能迁到己方领土'};
     if(this.isCapital(target))return {ok:false,reason:'这里已经是你的首都'};
@@ -173,6 +191,11 @@ export class Game {
   aiMove(owner){
     if(!this.running||this.paused||this.winner!==null)return null;
     const owned=this.cells.filter(c=>c.owner===owner);if(!owned.length)return null;
+    if(this.capitalLost[owner]){
+      // Rebuilding is this round's action, not a passive restoration on recapture.
+      const site=[...owned].sort((a,b)=>(Math.min(b.army,999)-this.aiThreat(b.id,owner)*4)-(Math.min(a.army,999)-this.aiThreat(a.id,owner)*4))[0];
+      return this.constructCapital(site.id,owner);
+    }
     const counts=Array(this.players).fill(0);this.cells.forEach(c=>{if(c.owner>=0)counts[c.owner]++;});
     const fronts=[];
     for(const c of owned){

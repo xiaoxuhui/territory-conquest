@@ -90,6 +90,12 @@ function moveCapital(){
   lastBattle=null;resolutionAt=playbackTime+350;flashActions(result.actions);
   toast(`首都已迁至 ${coord(result.toId)}`);checkResult();render();
 }
+function buildCapital(){
+  if(selected===null)return;
+  const result=game.buildCapital(selected,{defer:true});if(!result.ok){toast(result.reason);return;}
+  lastBattle=null;resolutionAt=playbackTime+350;flashActions(result.actions);
+  toast(`已在 ${coord(result.toId)} 建设新首都`);checkResult();render();
+}
 function advanceResolution(now){
   if(!game.resolving||game.paused||now<resolutionAt)return;
   const phase=game.stepTurn();if(!phase)return;
@@ -118,7 +124,7 @@ function render(){
   $('observerModeNote').textContent=game.observerMode==='step'?`当前 ${config.observerSpeed}×：只加快回合内动画，每次仍只走一回合。切换模式时会完成当前回合。`:`当前 ${config.observerSpeed}×：加快电脑行动和回合间隔，可随时调速或暂停。`;
   document.documentElement.style.setProperty('--accent',faction?.color||FACTIONS[0].color);
   $('currentPlayer').textContent=game.humans===0?`纯电脑观战 · ${observationName} · ${config.observerSpeed}×`:spectating&&game.automatic?`电脑观战 · ${observationName} · ${config.observerSpeed}×`:`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
-  if(lastController!==null&&!game.automatic&&game.capitalLost[lastController])$('currentPlayer').textContent+=' · 首都已失守（不可恢复）';
+  if(lastController!==null&&!game.automatic&&game.capitalLost[lastController])$('currentPlayer').textContent+=' · 首都已失守，可建设新首都';
   $('currentPlayer').style.setProperty('--player-color',faction?.color||FACTIONS[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
@@ -140,11 +146,14 @@ function render(){
   $('turnLabel').textContent=`第 ${game.turn} 回合`;
   $('waitBtn').hidden=!game.running||game.continuous;$('waitBtn').disabled=game.paused||game.resolving;
   $('waitBtn').textContent=game.automatic?'推进一回合':'蓄兵一回合';
-  $('moveCapitalBtn').hidden=!game.running||game.automatic||spectating;
+  const hasCapital=lastController!==null&&game.cells.some(c=>c.owner===lastController&&game.isCapital(c));
+  $('moveCapitalBtn').hidden=!game.running||game.automatic||spectating||!hasCapital;
+  $('buildCapitalBtn').hidden=!game.running||game.automatic||spectating||hasCapital;
   const capitalTarget=selected===null?null:game.cells[selected];
   const capitalLost=game.currentHuman!==null&&game.capitalLost[game.currentHuman];
   $('moveCapitalBtn').disabled=game.paused||game.resolving||capitalLost||!capitalTarget||capitalTarget.owner!==game.currentHuman||game.isCapital(capitalTarget);
-  $('moveCapitalBtn').title=capitalLost?'首都已失守，不能恢复或重新迁都':'选中己方普通领土后迁都，消耗本次行动';
+  $('moveCapitalBtn').title=capitalLost?'当前没有首都，请先建设新首都':'选中己方普通领土后迁都，消耗本次行动';
+  $('buildCapitalBtn').disabled=game.paused||game.resolving||!capitalTarget||capitalTarget.owner!==game.currentHuman||hasCapital;
   const ended=game.winner!==null;
   $('gameState').textContent=ended?'战斗结束':game.paused?'战局暂停':game.resolving?'回合结算中':game.running?(game.automatic?(game.continuous?'自动对战中':'等待下一步'):game.humans>1?`${faction.name}的回合`:'轮到你了'):'准备就绪';
   $('gameState').classList.toggle('running',game.running&&!game.paused);
@@ -202,6 +211,7 @@ $('startBtn').onclick=start;$('pauseBtn').onclick=togglePause;$('resumeBtn').onc
 $('restartBtn').onclick=()=>requestReset(()=>{});
 $('waitBtn').onclick=waitTurn;
 $('moveCapitalBtn').onclick=moveCapital;
+$('buildCapitalBtn').onclick=buildCapital;
 $('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};
 $('observerSpeeds').onclick=e=>{const speed=Number(e.target.dataset.observerSpeed);if(!game.automatic||game.winner!==null||![1,2,4,8].includes(speed))return;config.observerSpeed=speed;render();};
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};

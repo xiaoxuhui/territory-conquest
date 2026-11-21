@@ -266,7 +266,7 @@ test('capital migration rejects neutral, enemy, current capital, paused and unst
   assert.equal(g.turn,0);Object.assign(g.cells[12],{owner:0,army:5});g.paused=true;assert.equal(g.moveCapital(12).ok,false);
   g.paused=false;g.running=false;assert.equal(g.moveCapital(12).ok,false);assert.equal(g.turn,0);
 });
-test('capturing a capital destroys it permanently even after the original owner recaptures its tile',()=>{
+test('recapturing a destroyed capital does not restore it without an explicit construction action',()=>{
   const g=new Game({humans:2,ai:0});g.running=true;
   Object.assign(g.cells[10],{owner:1,army:10});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:100});
   assert.equal(g.attack(10,11,1,1).captured,true);assert.equal(g.capitalLost[0],true);assert.equal(g.cells[11].capital,-1);
@@ -292,10 +292,31 @@ test('each human moves only their own capital and hands the action to the next p
   const second=g.spawns[1],target=g.neighbors(second).find(id=>g.cells[id].owner===-1);Object.assign(g.cells[target],{owner:1,army:4});
   assert.equal(g.moveCapital(target).ok,true);assert.equal(g.currentHuman,0);assert.equal(g.cells[second].capital,-1);assert.equal(g.cells[target].capital,1);
 });
-test('computers cannot recreate a captured capital',()=>{
+test('computers rebuild a captured capital using their one action and do not restore the old site passively',()=>{
   const g=running(),capital=g.spawns[1];g.cells[capital].army=1;
   const attacker=g.neighbors(capital)[0],spare=g.neighbors(capital).find(id=>id!==attacker);
   Object.assign(g.cells[attacker],{owner:0,army:20});Object.assign(g.cells[spare],{owner:1,army:20});
-  g.attack(attacker,capital,0,1);assert.equal(g.capitalLost[1],true);const action=g.aiMove(1);
-  assert.notEqual(action?.kind,'capital');assert.equal(g.cells.some(c=>c.capital===1),false);
+  g.attack(attacker,capital,0,1);assert.equal(g.capitalLost[1],true);assert.equal(g.cells.some(c=>c.capital===1),false);
+  const land=g.stats()[1].land,result=g.waitTurn();assert.equal(result.actions.length,1);assert.equal(result.actions[0].kind,'capital-build');assert.equal(result.actions[0].owner,1);
+  assert.equal(g.stats()[1].land,land);assert.equal(g.capitalLost[1],false);assert.equal(g.cells.filter(c=>c.capital===1).length,1);assert.equal(g.cells[capital].capital,-1);
+});
+test('building a new capital consumes a turn without moving troops and restores its growth bonus',()=>{
+  const g=running();g.aiMove=()=>null;Object.assign(g.cells[10],{owner:1,army:20});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:10});
+  g.attack(10,11,1,1);assert.equal(g.capitalLost[0],true);
+  const result=g.buildCapital(12,{defer:true});assert.equal(result.ok,true);assert.equal(result.kind,'capital-build');assert.equal(g.turn,1);assert.equal(g.cells[12].army,10);
+  assert.equal(g.isCapital(g.cells[12]),true);assert.equal(g.capitalLost[0],false);assert.equal(g.buildCapital(12).ok,false);
+  while(g.resolving)g.stepTurn();assert.equal(g.cells[12].army,13);assert.equal(g.cells.filter(c=>c.capital===0).length,1);
+  Object.assign(g.cells[13],{owner:0,army:5});assert.equal(g.moveCapital(13).ok,true);assert.equal(g.cells[12].capital,-1);assert.equal(g.isCapital(g.cells[13]),true);
+});
+test('construction cannot duplicate a capital or use neutral or enemy territory',()=>{
+  const g=running();assert.equal(g.buildCapital(g.spawns[0]).ok,false);assert.equal(g.turn,0);
+  Object.assign(g.cells[10],{owner:1,army:20});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:10});g.attack(10,11,1,1);
+  for(const id of [11,13,-1])assert.equal(g.buildCapital(id).ok,false);
+  assert.equal(g.capitalLost[0],true);assert.equal(g.turn,0);
+  g.paused=true;assert.equal(g.buildCapital(12).ok,false);g.paused=false;g.running=false;assert.equal(g.buildCapital(12).ok,false);assert.equal(g.turn,0);
+});
+test('a recaptured old site is ordinary until the player explicitly builds a new capital there',()=>{
+  const g=running();g.aiMove=()=>null;Object.assign(g.cells[10],{owner:1,army:10});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:100});
+  g.attack(10,11,1,1);g.attack(12,11,0,1);assert.equal(g.isCapital(g.cells[11]),false);assert.equal(g.capitalLost[0],true);
+  assert.equal(g.buildCapital(11).ok,true);assert.equal(g.isCapital(g.cells[11]),true);assert.equal(g.capitalLost[0],false);assert.equal(g.cells.filter(c=>c.capital===0).length,1);
 });
