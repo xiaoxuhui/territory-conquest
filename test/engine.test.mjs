@@ -245,8 +245,57 @@ test('AI waits for enough support to survive a counterattack and uses half when 
 test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
   for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
     const g=new Game({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
-    while(g.winner===null&&g.turn<6000)g.waitTurn();
+    // Losing a capital is now permanent, which changes late-game income and
+    // lengthens this hard endgame (7304 rounds in the reproduced seed).
+    while(g.winner===null&&g.turn<8000)g.waitTurn();
     assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
     assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);
   }
+});
+test('moving a capital consumes one human action, keeps armies in place and moves the growth bonus',()=>{
+  const g=running();g.aiMove=()=>null;Object.assign(g.cells[12],{owner:0,army:7});
+  const result=g.moveCapital(12,{defer:true});assert.equal(result.ok,true);assert.equal(g.turn,1);
+  assert.equal(g.cells[11].capital,-1);assert.equal(g.cells[12].capital,0);
+  assert.equal(g.cells[11].army,20);assert.equal(g.cells[12].army,7);assert.equal(g.moveCapital(11).ok,false);
+  while(g.resolving)g.stepTurn();assert.equal(g.cells[11].army,21);assert.equal(g.cells[12].army,10);
+  assert.equal(g.cells.filter(c=>c.capital===0).length,1);
+});
+test('capital migration rejects neutral, enemy, current capital, paused and unstarted moves without spending a turn',()=>{
+  const g=running();
+  for(const id of [12,g.spawns[1],g.spawns[0],-1])assert.equal(g.moveCapital(id).ok,false);
+  assert.equal(g.turn,0);Object.assign(g.cells[12],{owner:0,army:5});g.paused=true;assert.equal(g.moveCapital(12).ok,false);
+  g.paused=false;g.running=false;assert.equal(g.moveCapital(12).ok,false);assert.equal(g.turn,0);
+});
+test('capturing a capital destroys it permanently even after the original owner recaptures its tile',()=>{
+  const g=new Game({humans:2,ai:0});g.running=true;
+  Object.assign(g.cells[10],{owner:1,army:10});g.cells[11].army=1;Object.assign(g.cells[12],{owner:0,army:100});
+  assert.equal(g.attack(10,11,1,1).captured,true);assert.equal(g.capitalLost[0],true);assert.equal(g.cells[11].capital,-1);
+  assert.equal(g.attack(12,11,0,1).captured,true);assert.equal(g.isCapital(g.cells[11]),false);
+  assert.equal(g.relocateCapital(11,0).ok,false);assert.equal(g.relocateCapital(12,0).ok,false);
+  const before=g.cells[11].army;g.waitTurn();g.waitTurn();assert.equal(g.cells[11].army,before+1);
+  assert.equal(g.capitalLost[0],true);assert.equal(g.cells.filter(c=>c.capital===0).length,0);assert.equal(g.winner,null);
+});
+test('capturing the old site after migration does not destroy the new capital, but capturing the moved capital does',()=>{
+  const g=running();Object.assign(g.cells[12],{owner:0,army:5});Object.assign(g.cells[13],{owner:0,army:5});
+  assert.equal(g.relocateCapital(12,0).ok,true);Object.assign(g.cells[10],{owner:1,army:20});
+  g.attack(10,11,1,1);assert.equal(g.capitalLost[0],false);assert.equal(g.isCapital(g.cells[12]),true);
+  Object.assign(g.cells[22],{owner:1,army:50});g.attack(22,12,1,1);
+  assert.equal(g.capitalLost[0],true);assert.equal(g.cells[12].capital,-1);assert.equal(g.relocateCapital(13,0).ok,false);
+});
+test('failed and equal-strength attacks do not destroy a capital',()=>{
+  const g=running();Object.assign(g.cells[10],{owner:1,army:21});g.attack(10,11,1,1);
+  assert.equal(g.cells[11].owner,0);assert.equal(g.cells[11].army,0);assert.equal(g.capitalLost[0],false);assert.equal(g.isCapital(g.cells[11]),true);
+});
+test('each human moves only their own capital and hands the action to the next player',()=>{
+  const g=new Game({humans:2,ai:0});g.running=true;Object.assign(g.cells[12],{owner:0,army:4});
+  assert.equal(g.moveCapital(12).ok,true);assert.equal(g.currentHuman,1);assert.equal(g.moveCapital(11).ok,false);
+  const second=g.spawns[1],target=g.neighbors(second).find(id=>g.cells[id].owner===-1);Object.assign(g.cells[target],{owner:1,army:4});
+  assert.equal(g.moveCapital(target).ok,true);assert.equal(g.currentHuman,0);assert.equal(g.cells[second].capital,-1);assert.equal(g.cells[target].capital,1);
+});
+test('computers cannot recreate a captured capital',()=>{
+  const g=running(),capital=g.spawns[1];g.cells[capital].army=1;
+  const attacker=g.neighbors(capital)[0],spare=g.neighbors(capital).find(id=>id!==attacker);
+  Object.assign(g.cells[attacker],{owner:0,army:20});Object.assign(g.cells[spare],{owner:1,army:20});
+  g.attack(attacker,capital,0,1);assert.equal(g.capitalLost[1],true);const action=g.aiMove(1);
+  assert.notEqual(action?.kind,'capital');assert.equal(g.cells.some(c=>c.capital===1),false);
 });

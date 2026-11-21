@@ -22,7 +22,7 @@ export class Game {
     const players=humans+ai;
     if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(humans)||humans<0||!Number.isInteger(ai)||ai<0||players<1||players>8||players>(w-2)*(h-2)) throw new Error('人类与电脑合计需为 1–8 位，且地图必须能容纳所有玩家');
     this.w=w;this.h=h;this.humans=humans;this.ai=ai;this.players=players;this.currentHuman=humans?0:null;this.difficulty=difficulty;this.rng=seededRandom(seed);
-    this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1}));
+    this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1}));this.capitalLost=Array(players).fill(false);
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
     const places=[this.w+1];
     while(places.length<players) {
@@ -41,6 +41,7 @@ export class Game {
   }
   neighbors(id){const x=id%this.w,y=Math.floor(id/this.w);return [x>0?id-1:-1,x<this.w-1?id+1:-1,y>0?id-this.w:-1,y<this.h-1?id+this.w:-1].filter(i=>i>=0);}
   isHuman(owner){return Number.isInteger(owner)&&owner>=0&&owner<this.humans;}
+  isCapital(cell){return !!cell&&cell.owner>=0&&cell.capital===cell.owner&&!this.capitalLost[cell.owner];}
   aliveHumans(){return Array.from({length:this.humans},(_,id)=>id).filter(id=>this.cells.some(c=>c.owner===id));}
   get automatic(){return this.aliveHumans().length===0;}
   get continuous(){return this.automatic&&this.observerMode==='continuous';}
@@ -62,6 +63,10 @@ export class Game {
     if(to.owner===owner)to.army+=amount;
     else if(amount>to.army){to.army=amount-to.army;to.owner=owner;captured=true;}
     else to.army-=amount;
+    if(captured&&oldOwner>=0&&to.capital===oldOwner){
+      this.capitalLost[oldOwner]=true;to.capital=-1;
+      this.addEvent(`${FACTIONS[oldOwner].name}首都被攻占，永久失去首都`,'capital-lost',oldOwner);
+    }
     const kind=oldOwner===owner?'reinforce':'attack';
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${FACTIONS[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
@@ -76,6 +81,28 @@ export class Game {
   }
   checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${FACTIONS[owner].name}占领全图，获得胜利！`,'victory',owner);}}
   get resolving(){return this.pendingTurn!==null;}
+  relocateCapital(toId,owner){
+    if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'当前不能迁都'};
+    if(this.capitalLost[owner])return {ok:false,reason:'首都已经失守，不能恢复或重新迁都'};
+    const target=this.cells[toId];
+    if(!target||target.owner!==owner)return {ok:false,reason:'首都只能迁到己方领土'};
+    if(this.isCapital(target))return {ok:false,reason:'这里已经是你的首都'};
+    const previous=this.cells.find(c=>c.owner===owner&&this.isCapital(c));
+    if(!previous)return {ok:false,reason:'没有可迁移的首都'};
+    const fromId=previous.id;
+    this.cells.forEach(c=>{if(c.capital===owner)c.capital=-1;});target.capital=owner;
+    this.aiPlans[owner]=null;
+    const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
+    this.addEvent(`${FACTIONS[owner].name}迁都至 ${location}`,'capital',owner);
+    return {ok:true,kind:'capital',owner,oldOwner:owner,fromId,toId,amount:0,captured:false};
+  }
+  moveCapital(toId,options={}){
+    if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
+    if(this.currentHuman===null)return {ok:false,reason:'当前没有轮到人类玩家'};
+    const result=this.relocateCapital(toId,this.currentHuman);
+    if(result.ok)result.actions=this.finishTurn([{...result}],options);
+    return result;
+  }
   playTurn(fromId,toId,ratio=0.5,options={}){
     if(this.resolving)return {ok:false,reason:'当前回合正在结算'};
     if(this.currentHuman===null)return {ok:false,reason:'当前没有轮到人类玩家'};
@@ -124,7 +151,7 @@ export class Game {
       // Fighting suppresses passive growth for both sides, including capitals.
       // Friendly reinforcements remain valid and are separate, recorded actions.
       if(c.owner>=0&&c.army<999&&!pending.contested.has(c.id)){
-        const before=c.army;c.army=Math.min(999,c.army+(c.capital===c.owner?3:1));
+        const before=c.army;c.army=Math.min(999,c.army+(this.isCapital(c)?3:1));
         changes.push({id:c.id,owner:c.owner,before,after:c.army,amount:c.army-before});
       }
     });
@@ -171,7 +198,7 @@ export class Game {
         }else{
           const required=to.army+threat+2;
           score=100+(from.army-1>=required?80:0)+(from.id===this.aiAnchors[owner]?60:0)
-            +30/Math.max(1,counts[to.owner])+(to.capital===to.owner?8:0)
+            +30/Math.max(1,counts[to.owner])+(this.isCapital(to)?8:0)
             -Math.log1p(required)*8+Math.log1p(from.army)*6;
         }
         score+=this.rng()*(this.difficulty==='easy'?16:this.difficulty==='hard'?1:4);

@@ -84,6 +84,12 @@ function clickTile(id){
 function coord(id){return `${String.fromCharCode(65+id%game.w)}${Math.floor(id/game.w)+1}`;}
 function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.toId,{until:performance.now()+350,captured:a.captured});}
 function waitTurn(){if(game.continuous)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=playbackTime+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
+function moveCapital(){
+  if(selected===null)return;
+  const result=game.moveCapital(selected,{defer:true});if(!result.ok){toast(result.reason);return;}
+  lastBattle=null;resolutionAt=playbackTime+350;flashActions(result.actions);
+  toast(`首都已迁至 ${coord(result.toId)}`);checkResult();render();
+}
 function advanceResolution(now){
   if(!game.resolving||game.paused||now<resolutionAt)return;
   const phase=game.stepTurn();if(!phase)return;
@@ -112,6 +118,7 @@ function render(){
   $('observerModeNote').textContent=game.observerMode==='step'?`当前 ${config.observerSpeed}×：只加快回合内动画，每次仍只走一回合。切换模式时会完成当前回合。`:`当前 ${config.observerSpeed}×：加快电脑行动和回合间隔，可随时调速或暂停。`;
   document.documentElement.style.setProperty('--accent',faction?.color||FACTIONS[0].color);
   $('currentPlayer').textContent=game.humans===0?`纯电脑观战 · ${observationName} · ${config.observerSpeed}×`:spectating&&game.automatic?`电脑观战 · ${observationName} · ${config.observerSpeed}×`:`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
+  if(lastController!==null&&!game.automatic&&game.capitalLost[lastController])$('currentPlayer').textContent+=' · 首都已失守（不可恢复）';
   $('currentPlayer').style.setProperty('--player-color',faction?.color||FACTIONS[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
@@ -120,19 +127,24 @@ function render(){
   const now=performance.now();
   game.cells.forEach((c,i)=>{
     const el=tiles[i],f=c.owner>=0?FACTIONS[c.owner]:null,flash=flashes.get(i);
-    const cls=`cell ${f?'owned':'empty'} ${c.capital===c.owner&&f?'capital':''} ${i===selected?'selected':''} ${neighbors.includes(i)?'reachable':''} ${game.w>=16?'small':''} ${flash&&flash.until>now?(flash.captured?'flash':'attacked'):''}`;
+    const cls=`cell ${f?'owned':'empty'} ${game.isCapital(c)?'capital':''} ${i===selected?'selected':''} ${neighbors.includes(i)?'reachable':''} ${game.w>=16?'small':''} ${flash&&flash.until>now?(flash.captured?'flash':'attacked'):''}`;
     if(el.className!==cls)el.className=cls;
-    const label=`${coord(i)}，${f?(c.owner===lastController?'你的领土':f.name+'领土')+'，'+c.army+' 兵力':'未占领'}`;
+    const label=`${coord(i)}，${f?(c.owner===lastController?'你的领土':f.name+'领土')+'，'+c.army+' 兵力'+(game.isCapital(c)?'，首都':''):'未占领'}`;
     if(el.getAttribute('aria-label')!==label)el.setAttribute('aria-label',label);
     el.setAttribute('aria-pressed',i===selected);
     el.style.setProperty('--faction',f?.color||'#aac56f');
-    const html=f?`${c.capital===c.owner?'<svg class="cell-flag"><use href="#i-flag"/></svg>':''}<span>${c.army>9999?Math.floor(c.army/1000)+'k':c.army}</span><span class="cell-faction">${f.symbol}</span>`:'';
+    const html=f?`${game.isCapital(c)?'<svg class="cell-flag"><use href="#i-flag"/></svg>':''}<span>${c.army>9999?Math.floor(c.army/1000)+'k':c.army}</span><span class="cell-faction">${f.symbol}</span>`:'';
     if(el.innerHTML!==html)el.innerHTML=html;
   });
   $('timer').textContent=formatTime(game.time);
   $('turnLabel').textContent=`第 ${game.turn} 回合`;
   $('waitBtn').hidden=!game.running||game.continuous;$('waitBtn').disabled=game.paused||game.resolving;
   $('waitBtn').textContent=game.automatic?'推进一回合':'蓄兵一回合';
+  $('moveCapitalBtn').hidden=!game.running||game.automatic||spectating;
+  const capitalTarget=selected===null?null:game.cells[selected];
+  const capitalLost=game.currentHuman!==null&&game.capitalLost[game.currentHuman];
+  $('moveCapitalBtn').disabled=game.paused||game.resolving||capitalLost||!capitalTarget||capitalTarget.owner!==game.currentHuman||game.isCapital(capitalTarget);
+  $('moveCapitalBtn').title=capitalLost?'首都已失守，不能恢复或重新迁都':'选中己方普通领土后迁都，消耗本次行动';
   const ended=game.winner!==null;
   $('gameState').textContent=ended?'战斗结束':game.paused?'战局暂停':game.resolving?'回合结算中':game.running?(game.automatic?(game.continuous?'自动对战中':'等待下一步'):game.humans>1?`${faction.name}的回合`:'轮到你了'):'准备就绪';
   $('gameState').classList.toggle('running',game.running&&!game.paused);
@@ -166,7 +178,7 @@ function render(){
 function renderIntel(){
   const id=hovered??selected;if(id===null){$('tileIntel').innerHTML='<div class="intel-placeholder">◇</div><p>选择一块领土<br><span>查看兵力与进攻信息</span></p>';return;}
   const c=game.cells[id],f=c.owner>=0?FACTIONS[c.owner]:null;
-  let note=c.owner===-1?'未占领 · 没有守军':c.capital===c.owner?'初始据点 · 每轮 +3 兵力':'普通领土 · 每轮 +1 兵力';
+  let note=c.owner===-1?'未占领 · 没有守军':game.isCapital(c)?'首都 · 每轮 +3 兵力':'普通领土 · 每轮 +1 兵力';
   if(selected!==null&&selected!==id&&game.cells[selected].owner===lastController&&game.neighbors(selected).includes(id)){
     const sent=game.sent(game.cells[selected],ratio);note=c.owner===lastController?`调兵：可增援 ${sent} 兵力`:sent>c.army?`可攻占 · 出兵后剩余 ${sent-c.army}`:`守军 ${c.army} · 可出兵 ${sent}`;
   }
@@ -189,6 +201,7 @@ function checkResult(){
 $('startBtn').onclick=start;$('pauseBtn').onclick=togglePause;$('resumeBtn').onclick=togglePause;
 $('restartBtn').onclick=()=>requestReset(()=>{});
 $('waitBtn').onclick=waitTurn;
+$('moveCapitalBtn').onclick=moveCapital;
 $('observerModes').onclick=e=>{const mode=e.target.dataset.observerMode;if(!mode||!game.automatic||game.winner!==null)return;config.observerMode=mode;game.setObserverMode(mode);renderSettings();render();};
 $('observerSpeeds').onclick=e=>{const speed=Number(e.target.dataset.observerSpeed);if(!game.automatic||game.winner!==null||![1,2,4,8].includes(speed))return;config.observerSpeed=speed;render();};
 $('levelList').onclick=e=>{const b=e.target.closest('[data-level]');if(b&&+b.dataset.level!==config.level)requestReset(()=>config.level=+b.dataset.level);};
