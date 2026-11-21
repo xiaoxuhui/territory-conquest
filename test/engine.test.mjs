@@ -35,7 +35,7 @@ test('AI expands, fights and routes reinforcements without illegal moves or resu
     const g=new Game({w:10,h:8,ai:3,difficulty});g.running=true;
     for(let i=0;i<240&&g.winner===null;i++){
       g.aiMove(0);g.waitTurn();
-      assert.ok(g.cells.every(c=>c.army>=0&&Number.isInteger(c.army)&&c.owner>=-1&&c.owner<=3));
+      assert.ok(g.cells.every(c=>c.army>=0&&Number.isInteger(c.army)&&c.owner>=-1&&c.owner<g.players));
     }
     assert.ok(g.cells.filter(c=>c.owner>=0).length>20);
     g.cells.forEach(c=>{if(c.owner===2)c.owner=1;});assert.equal(g.aiMove(2),null);

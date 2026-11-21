@@ -16,13 +16,20 @@ export const LEVELS = [
   {name:'烽火大陆',subtitle:'五路强敌，寸土必争',w:18,h:12,ai:5},
   {name:'天下归一',subtitle:'征服最后一片疆土',w:20,h:13,ai:7}
 ];
+export const UNREST_LIMIT=4,UNREST_WINDOW=8,SECESSION_GRACE=12;
+function newCountry(id,number){
+  const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
+  const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});
+  return {name:`新国${number}`,color:'#'+rgb.map(c=>c.toString(16).padStart(2,'0')).join(''),rgb:rgb.join(','),symbol:'✧',rebel:true};
+}
 export function seededRandom(seed) { return () => { let t=seed+=0x6D2B79F5;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296; }; }
 export class Game {
   constructor({w=10,h=8,humans=1,ai=1,difficulty='normal',seed=1,observerMode='continuous'}={}) {
     const players=humans+ai;
     if(!Number.isInteger(w)||!Number.isInteger(h)||w<4||h<4||!Number.isInteger(humans)||humans<0||!Number.isInteger(ai)||ai<0||players<1||players>8||players>(w-2)*(h-2)) throw new Error('人类与电脑合计需为 1–8 位，且地图必须能容纳所有玩家');
     this.w=w;this.h=h;this.humans=humans;this.ai=ai;this.players=players;this.currentHuman=humans?0:null;this.difficulty=difficulty;this.rng=seededRandom(seed);
-    this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1}));this.capitalLost=Array(players).fill(false);
+    this.factions=FACTIONS.slice(0,players);this.secessions=0;
+    this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,army:0,capital:-1,unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
     const places=[this.w+1];
     while(places.length<players) {
@@ -50,7 +57,36 @@ export class Game {
     if(!['step','continuous'].includes(mode))throw new Error('请选择单步或连续观战模式');
     this.observerMode=mode;this.automaticElapsed=0;
   }
-  stats(){return FACTIONS.slice(0,this.players).map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
+  stats(){return this.factions.map((f,id)=>{const cells=this.cells.filter(c=>c.owner===id);return {...f,id,human:this.isHuman(id),land:cells.length,army:cells.reduce((s,c)=>s+c.army,0)};});}
+  unrest(cell){return cell&&this.turn>=cell.stableUntil?cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW).length:0;}
+  recordUnrest(cell,kind){
+    if(this.turn<cell.stableUntil)return;
+    cell.unrestEvents=cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW);
+    const turn=this.roundState?this.turn:this.turn+1;
+    if(kind==='drain'&&cell.unrestEvents.some(e=>e.kind===kind&&e.turn===turn))return;
+    cell.unrestEvents.push({turn,kind});
+  }
+  resolveSecessions(){
+    if(!this.running||this.paused||this.winner!==null)return [];
+    const countries=[];
+    for(const center of this.cells){
+      if(center.owner<0||this.unrest(center)<UNREST_LIMIT)continue;
+      const oldOwner=center.owner,region=[center];
+      // Only neighboring restless land joins; calm or foreign tiles stay put.
+      for(let q=0;q<region.length&&region.length<3;q++)for(const id of this.neighbors(region[q].id)){
+        const c=this.cells[id];if(region.length<3&&c.owner===oldOwner&&this.unrest(c)>=2&&!region.includes(c))region.push(c);
+      }
+      const owner=this.players++;this.ai++;this.factions.push(newCountry(owner,++this.secessions));
+      this.capitalLost.push(false);this.aiPlans.push(null);this.aiAnchors.push(center.id);this.spawns.push(center.id);
+      for(const c of region){c.owner=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
+      center.capital=owner;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;this.aiPlans[oldOwner]=null;
+      const location=`${String.fromCharCode(65+center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
+      this.addEvent(`${location}一带因反复易手或抽调驻军发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，电脑控制）`,'secession',owner);
+      if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
+      countries.push({owner,oldOwner,capital:center.id,cells:region.map(c=>c.id)});
+    }
+    return countries;
+  }
   addEvent(text,kind='system',owner=-1){this.events.unshift({text,kind,owner,time:this.time});this.events=this.events.slice(0,30);}
   sent(from,ratio=0.5){return Math.max(0,Math.min(from.army-1,Math.floor(from.army*Math.min(1,Math.max(0,ratio)))));}
   attack(fromId,toId,owner,ratio=0.5){
@@ -66,21 +102,23 @@ export class Game {
     else to.army-=amount;
     if(captured&&oldOwner>=0&&to.capital===oldOwner){
       to.capital=-1;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;
-      this.addEvent(`${FACTIONS[oldOwner].name}首都被攻占，原首都失效`,'capital-lost',oldOwner);
+      this.addEvent(`${this.factions[oldOwner].name}首都被攻占，原首都失效`,'capital-lost',oldOwner);
     }
     const kind=oldOwner===owner?'reinforce':'attack';
+    if(captured&&oldOwner>=0)this.recordUnrest(to,'capture');
+    if(kind==='reinforce'&&amount>=3&&amount/fromBefore>=.75)this.recordUnrest(from,'drain');
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
-    if(kind==='reinforce')this.addEvent(`${FACTIONS[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
-    else if(oldOwner>=0)this.addEvent(`${FACTIONS[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);
+    if(kind==='reinforce')this.addEvent(`${this.factions[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
+    else if(oldOwner>=0)this.addEvent(`${this.factions[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);
     if(this.isHuman(owner)){this.moves++;if(captured)this.captures++;}
     if(captured&&oldOwner>=0){
-      this.addEvent(`${FACTIONS[owner].name}攻占了${FACTIONS[oldOwner].name}的领土`,'battle',owner);
-      if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${FACTIONS[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
+      this.addEvent(`${this.factions[owner].name}攻占了${this.factions[oldOwner].name}的领土`,'battle',owner);
+      if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
     }
     this.checkWinner();
     return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
   }
-  checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${FACTIONS[owner].name}占领全图，获得胜利！`,'victory',owner);}}
+  checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${this.factions[owner].name}占领全图，获得胜利！`,'victory',owner);}}
   get resolving(){return this.pendingTurn!==null;}
   constructCapital(toId,owner){
     if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'当前不能建设首都'};
@@ -90,7 +128,7 @@ export class Game {
     if(this.capitals(owner).length>=2)return {ok:false,reason:'已有两座首都，请使用迁都'};
     this.capitalLost[owner]=false;target.capital=owner;this.aiPlans[owner]=null;
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
-    this.addEvent(`${FACTIONS[owner].name}在 ${location} 建设了新首都`,'capital-build',owner);
+    this.addEvent(`${this.factions[owner].name}在 ${location} 建设了新首都`,'capital-build',owner);
     return {ok:true,kind:'capital-build',owner,oldOwner:owner,fromId:-1,toId,amount:0,captured:false};
   }
   buildCapital(toId,options={}){
@@ -112,7 +150,7 @@ export class Game {
     previous.capital=-1;target.capital=owner;
     this.aiPlans[owner]=null;
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
-    this.addEvent(`${FACTIONS[owner].name}迁都至 ${location}`,'capital',owner);
+    this.addEvent(`${this.factions[owner].name}迁都至 ${location}`,'capital',owner);
     return {ok:true,kind:'capital',owner,oldOwner:owner,fromId,toId,amount:0,captured:false};
   }
   moveCapital(toId,options={}){
@@ -174,8 +212,9 @@ export class Game {
         changes.push({id:c.id,owner:c.owner,before,after:c.army,amount:c.army-before});
       }
     });
+    const secessions=this.resolveSecessions();
     this.pendingTurn=null;this.roundState=null;this.currentHuman=this.aliveHumans()[0]??null;
-    this.checkWinner();return {kind:'growth',changes};
+    this.checkWinner();return {kind:'growth',changes,secessions};
   }
   update(dt){
     if(!this.running||this.paused||this.winner!==null)return [];

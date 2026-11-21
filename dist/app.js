@@ -1,4 +1,4 @@
-import {Game,FACTIONS,LEVELS} from './engine.js';
+import {Game,LEVELS,UNREST_LIMIT} from './engine.js';
 const $=id=>document.getElementById(id);
 const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 let wins=[];
@@ -7,6 +7,10 @@ let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:14,h:10,
 let game,selected=null,hovered=null,ratio=.5,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
 let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0,playbackTime=0;
 const flashes=new Map();
+function factionColumn(f,id){
+  const el=document.createElement('div');el.className='faction-column';el.dataset.factionId=id;el.setAttribute('role','listitem');el.style.setProperty('--faction',f.color);
+  el.innerHTML=`<div class="faction-bar-track"><div class="faction-bar"><strong class="faction-bar-value">1</strong></div></div><span class="faction-bar-name">${f.name}</span><span class="faction-bar-controller">${game.isHuman(id)?'P'+(id+1):f.rebel?'新国 · 电脑':'电脑'}</span>`;return el;
+}
 function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
 function setupGame(){
   game=new Game(currentOptions());selected=null;hovered=null;spectating=game.humans===0;lastController=game.currentHuman;resultShown=false;flashes.clear();lastLog='';lastBattle=null;resolutionAt=0;playbackTime=0;
@@ -26,10 +30,7 @@ function setupGame(){
     el.addEventListener('click',()=>clickTile(c.id));el.addEventListener('mouseenter',()=>{hovered=c.id;renderIntel();});el.addEventListener('mouseleave',()=>{hovered=null;renderIntel();});el.addEventListener('focus',()=>{hovered=c.id;renderIntel();});el.addEventListener('blur',()=>{hovered=null;renderIntel();});
     frag.append(el);return el;
   });$('board').replaceChildren(frag);
-  factionEls=FACTIONS.slice(0,game.players).map((f,id)=>{
-    const el=document.createElement('div');el.className='faction-column';el.dataset.factionId=id;el.setAttribute('role','listitem');el.style.setProperty('--faction',f.color);
-    el.innerHTML=`<div class="faction-bar-track"><div class="faction-bar"><strong class="faction-bar-value">1</strong></div></div><span class="faction-bar-name">${f.name}</span><span class="faction-bar-controller">${game.isHuman(id)?'P'+(id+1):'电脑'}</span>`;return el;
-  });$('factionList').replaceChildren(...factionEls);renderSettings();render();
+  factionEls=game.factions.map(factionColumn);$('factionList').replaceChildren(...factionEls);renderSettings();render();
 }
 function renderSettings(){
   $('campaignTab').classList.toggle('active',config.mode==='campaign');$('campaignTab').setAttribute('aria-selected',config.mode==='campaign');
@@ -79,7 +80,7 @@ function clickTile(id){
     checkResult();render();return;
   }
   if(cell.owner===lastController){selected=id;render();}
-  else toast(selected===null?`当前由${FACTIONS[lastController].name}玩家行动，请选择该阵营领土`:'只能进攻上下左右相邻的格子');
+  else toast(selected===null?`当前由${game.factions[lastController].name}玩家行动，请选择该阵营领土`:'只能进攻上下左右相邻的格子');
 }
 function coord(id){return `${String.fromCharCode(65+id%game.w)}${Math.floor(id/game.w)+1}`;}
 function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.toId,{until:performance.now()+350,captured:a.captured});}
@@ -104,6 +105,10 @@ function advanceResolution(now){
     if(lastBattle&&phase.action.toId===lastBattle.action.toId&&phase.action.kind==='reinforce')lastBattle.reinforced+=phase.action.amount;
   }
   if(lastBattle&&phase.kind==='growth')lastBattle.grew=phase.changes.find(c=>c.id===lastBattle.action.toId)?.amount||0;
+  if(phase.secessions?.length){
+    lastBattle=null;for(const country of phase.secessions)for(const id of country.cells)flashes.set(id,{until:performance.now()+700,captured:true});
+    toast(`${phase.secessions.map(c=>game.factions[c.owner].name).join('、')}因地区动荡宣布独立`);
+  }
   resolutionAt=now+(phase.action?.ok?420:100);
   checkResult();render();
 }
@@ -112,30 +117,33 @@ function renderBattleResult(){
   const {action:a,reinforced,grew}=lastBattle;
   $('combatResult').textContent=a.kind==='reinforce'
     ? `己方增援 ${coord(a.toId)}：${a.toBefore} + ${a.amount} = ${a.toAfter}`
-    : `${FACTIONS[a.owner].name}派出 ${a.amount} · 守军 ${a.toBefore} − ${Math.min(a.amount,a.toBefore)} = ${Math.max(0,a.toBefore-a.amount)}${a.captured?` · 已攻占，驻军 ${a.toAfter}`:' · 未攻占'}${reinforced?` · 随后增援 +${reinforced}`:''}${grew?` · 回合增兵 +${grew}`:''}${a.oldOwner>=0?' · 交战格本回合不自动增兵':''}`;
+    : `${game.factions[a.owner].name}派出 ${a.amount} · 守军 ${a.toBefore} − ${Math.min(a.amount,a.toBefore)} = ${Math.max(0,a.toBefore-a.amount)}${a.captured?` · 已攻占，驻军 ${a.toAfter}`:' · 未攻占'}${reinforced?` · 随后增援 +${reinforced}`:''}${grew?` · 回合增兵 +${grew}`:''}${a.oldOwner>=0?' · 交战格本回合不自动增兵':''}`;
 }
 function render(){
   if(game.currentHuman!==null&&game.currentHuman!==lastController){lastController=game.currentHuman;selected=null;hovered=null;}
-  const faction=lastController!==null?FACTIONS[lastController]:null;
+  const faction=lastController!==null?game.factions[lastController]:null;
+  $('factionInfo').textContent=`${game.humans} 人类 · ${game.ai} 电脑${game.secessions?` · ${game.secessions} 个新国`:''}`;
   const observationName=game.observerMode==='step'?'走一步停一步':'一直走';
   $('observerControls').hidden=!game.automatic;
   document.querySelectorAll('[data-observer-mode]').forEach(b=>{const active=b.dataset.observerMode===game.observerMode;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);b.disabled=game.winner!==null;});
   document.querySelectorAll('[data-observer-speed]').forEach(b=>{const active=+b.dataset.observerSpeed===config.observerSpeed;b.classList.toggle('active',active);b.setAttribute('aria-pressed',active);b.disabled=game.winner!==null;});
   $('observerModeNote').textContent=game.observerMode==='step'?`当前 ${config.observerSpeed}×：只加快回合内动画，每次仍只走一回合。切换模式时会完成当前回合。`:`当前 ${config.observerSpeed}×：加快电脑行动和回合间隔，可随时调速或暂停。`;
-  document.documentElement.style.setProperty('--accent',faction?.color||FACTIONS[0].color);
+  document.documentElement.style.setProperty('--accent',faction?.color||game.factions[0].color);
   $('currentPlayer').textContent=game.humans===0?`纯电脑观战 · ${observationName} · ${config.observerSpeed}×`:spectating&&game.automatic?`电脑观战 · ${observationName} · ${config.observerSpeed}×`:`当前控制：玩家 ${lastController+1} · ${faction.name}${game.humans>1?'（同机轮流）':''}${game.ai===0?' · 全程手动':''}`;
   if(lastController!==null&&!game.automatic&&game.capitalLost[lastController])$('currentPlayer').textContent+=' · 首都已失守，可建设新首都';
-  $('currentPlayer').style.setProperty('--player-color',faction?.color||FACTIONS[0].color);
+  $('currentPlayer').style.setProperty('--player-color',faction?.color||game.factions[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
   const neighbors=selected!==null&&game.cells[selected]?.owner===lastController&&game.running&&!game.paused&&!game.resolving&&!spectating?game.neighbors(selected):[];
   $('board').setAttribute('aria-busy',game.resolving);
   const now=performance.now();
   game.cells.forEach((c,i)=>{
-    const el=tiles[i],f=c.owner>=0?FACTIONS[c.owner]:null,flash=flashes.get(i);
-    const cls=`cell ${f?'owned':'empty'} ${game.isCapital(c)?'capital':''} ${i===selected?'selected':''} ${neighbors.includes(i)?'reachable':''} ${game.w>=16?'small':''} ${flash&&flash.until>now?(flash.captured?'flash':'attacked'):''}`;
+    const el=tiles[i],f=c.owner>=0?game.factions[c.owner]:null,flash=flashes.get(i);
+    const unrest=game.unrest(c);
+    const cls=`cell ${f?'owned':'empty'} ${game.isCapital(c)?'capital':''} ${unrest>=2?'unstable':''} ${i===selected?'selected':''} ${neighbors.includes(i)?'reachable':''} ${game.w>=16?'small':''} ${flash&&flash.until>now?(flash.captured?'flash':'attacked'):''}`;
     if(el.className!==cls)el.className=cls;
-    const label=`${coord(i)}，${f?(c.owner===lastController?'你的领土':f.name+'领土')+'，'+c.army+' 兵力'+(game.isCapital(c)?'，首都':''):'未占领'}`;
+    const label=`${coord(i)}，${f?(c.owner===lastController?'你的领土':f.name+'领土')+'，'+c.army+' 兵力'+(game.isCapital(c)?'，首都':'')+`，动荡 ${unrest}/${UNREST_LIMIT}`:'未占领'}`;
+    el.title=label;
     if(el.getAttribute('aria-label')!==label)el.setAttribute('aria-label',label);
     el.setAttribute('aria-pressed',i===selected);
     el.style.setProperty('--faction',f?.color||'#aac56f');
@@ -168,7 +176,7 @@ function render(){
   $('pauseOverlay').hidden=!game.paused||!game.running||$('helpDialog').open||$('confirmDialog').open||$('resultDialog').open;
   $('startBtn').hidden=game.running||game.time>0||ended;$('troopControl').hidden=!game.running||spectating||game.automatic;
   $('startBtn').innerHTML=`<svg><use href="#i-cross"/></svg>${game.humans===0?'开始观战':'开始征战'}`;
-  if(ended){$('hintTitle').textContent=game.isHuman(game.winner)?(game.humans===1?'全境归你，征途完成！':`玩家 ${game.winner+1} · ${FACTIONS[game.winner].name}获胜`):`${FACTIONS[game.winner].name}统一了全境`;$('hintText').textContent='选择新关卡，或者点击重开再战一局。';}
+  if(ended){$('hintTitle').textContent=game.isHuman(game.winner)?(game.humans===1?'全境归你，征途完成！':`玩家 ${game.winner+1} · ${game.factions[game.winner].name}获胜`):`${game.factions[game.winner].name}统一了全境`;$('hintText').textContent='选择新关卡，或者点击重开再战一局。';}
   else if(game.paused){$('hintTitle').textContent='战局已暂停';$('hintText').textContent='点击继续，或按空格键返回战斗。';}
   else if(game.resolving){$('hintTitle').textContent='正在结算本回合';$('hintText').textContent='先显示战斗扣兵，再显示电脑行动和增兵。';}
   else if(game.automatic){$('hintTitle').textContent=game.observerMode==='step'?'走一步停一步':game.running?'自动运行中':'纯电脑自动对战';$('hintText').textContent=game.observerMode==='step'?(game.running?'点击「推进一回合」或按 E，完成一轮后停下。':'点击「开始观战」后，可逐回合推进电脑对战。'):game.running?'电脑会自行出兵和增兵，无需点击，可随时暂停。':'点击「开始观战」后，电脑会自动连续对战。';}
@@ -178,8 +186,9 @@ function render(){
   const stats=game.stats(),mine=lastController===null?stats.reduce((a,b)=>a.land>=b.land?a:b):stats[lastController],total=game.cells.length;
   $('occupationLabel').textContent=lastController===null?'领先阵营占领率':`${faction.name}占领率`;
   const chartMax=Math.max(2,...stats.map(s=>s.land));
+  while(factionEls.length<stats.length){const id=factionEls.length;factionEls.push(factionColumn(game.factions[id],id));}
   $('factionList').style.setProperty('--faction-count',stats.length);
-  stats.forEach((s,id)=>{const column=factionEls[id];column.dataset.land=s.land;column.classList.toggle('dead',s.land===0);column.classList.toggle('current-faction',id===game.currentHuman);column.querySelector('.faction-bar').style.height=`${s.land/chartMax*100}%`;column.querySelector('.faction-bar-value').textContent=s.land;column.querySelector('.faction-bar-controller').textContent=s.land?(s.human?'P'+(id+1):'电脑'):'出局';column.title=`${s.name}：${s.land} 格领土，${s.army} 总兵力`;column.setAttribute('aria-label',column.title);});
+  stats.forEach((s,id)=>{const column=factionEls[id];column.dataset.land=s.land;column.classList.toggle('dead',s.land===0);column.classList.toggle('current-faction',id===game.currentHuman);column.querySelector('.faction-bar').style.height=`${s.land/chartMax*100}%`;column.querySelector('.faction-bar-value').textContent=s.land;column.querySelector('.faction-bar-controller').textContent=s.land?(s.human?'P'+(id+1):s.rebel?'新国 · 电脑':'电脑'):'出局';column.title=`${s.name}：${s.land} 格领土，${s.army} 总兵力`;column.setAttribute('aria-label',column.title);});
   const ranked=[...stats].sort((a,b)=>a.land-b.land||a.id-b.id);
   const ordered=ranked.map(s=>factionEls[s.id]);
   if(ordered.some((el,i)=>$('factionList').children[i]!==el))$('factionList').replaceChildren(...ordered);
@@ -188,16 +197,17 @@ function render(){
   const neutral=total-stats.reduce((s,f)=>s+f.land,0);$('neutralCount').textContent=`${neutral} 格`;
   $('territoryShare').innerHTML=stats.filter(s=>s.land).map(s=>`<i style="width:${s.land/total*100}%;background:${s.color}"></i>`).join('')+`<i style="width:${neutral/total*100}%;background:#46523a"></i>`;
   const logKey=game.events.map(e=>e.text+e.time).join('|');
-  if(logKey!==lastLog){lastLog=logKey;$('battleLog').innerHTML=game.events.slice(0,5).map(e=>`<div class="log-item" ${e.owner>=0?`style="border-color:${FACTIONS[e.owner].color}66"`:''}><time>${formatTime(e.time)}</time><p>${e.text}</p></div>`).join('');}
+  if(logKey!==lastLog){lastLog=logKey;$('battleLog').innerHTML=game.events.slice(0,5).map(e=>`<div class="log-item" ${e.owner>=0?`style="border-color:${game.factions[e.owner].color}66"`:''}><time>${formatTime(e.time)}</time><p>${e.text}</p></div>`).join('');}
   renderIntel();renderBattleResult();
 }
 function renderIntel(){
   const id=hovered??selected;if(id===null){$('tileIntel').innerHTML='<div class="intel-placeholder">◇</div><p>选择一块领土<br><span>查看兵力与进攻信息</span></p>';return;}
-  const c=game.cells[id],f=c.owner>=0?FACTIONS[c.owner]:null;
+  const c=game.cells[id],f=c.owner>=0?game.factions[c.owner]:null;
   let note=c.owner===-1?'未占领 · 没有守军':game.isCapital(c)?'首都 · 每轮 +3 兵力':'普通领土 · 每轮 +1 兵力';
   if(selected!==null&&selected!==id&&game.cells[selected].owner===lastController&&game.neighbors(selected).includes(id)){
     const sent=game.sent(game.cells[selected],ratio);note=c.owner===lastController?`调兵：可增援 ${sent} 兵力`:sent>c.army?`可攻占 · 出兵后剩余 ${sent-c.army}`:`守军 ${c.army} · 可出兵 ${sent}`;
   }
+  if(c.owner>=0)note+=game.turn<c.stableUntil?` · 新国稳定期 ${c.stableUntil-game.turn} 回合`:` · 动荡 ${game.unrest(c)}/${UNREST_LIMIT}${game.unrest(c)>=2?'，注意分裂风险':''}`;
   $('tileIntel').innerHTML=`<div class="tile-preview" style="${f?`color:${f.color};border-color:${f.color}77;background:rgba(${f.rgb},.15)`:'background:#2e3d27;border-color:#596d48;color:#a3b68c'}">${c.owner>=0?c.army:'◇'}</div><div class="tile-detail"><div class="coordinate">${coord(id)}<span>${f?f.symbol:''}</span></div><strong>${f?(c.owner===lastController?'你的领土':f.name+'阵营'):'未占领的土地'}</strong><p class="intel-note">${note}</p></div>`;
 }
 function checkResult(){
@@ -208,7 +218,7 @@ function checkResult(){
   if(won&&config.mode==='campaign'&&!wins.includes(config.level)){wins.push(config.level);try{localStorage.setItem('territory-wins',JSON.stringify(wins));}catch{}renderSettings();}
   if(game.winner===null)game.paused=true;
   $('resultEyebrow').textContent=won?'TERRITORY CONQUERED':game.winner!==null?'BATTLE COMPLETE':'THE NEXT EXPEDITION AWAITS';
-  $('resultTitle').textContent=won?(game.humans===1?'全境归你':`玩家 ${game.winner+1} · ${FACTIONS[game.winner].name}获胜`):game.winner!==null?`${FACTIONS[game.winner].name}赢得胜利`:'暂别这一片疆土';
+  $('resultTitle').textContent=won?(game.humans===1?'全境归你':`玩家 ${game.winner+1} · ${game.factions[game.winner].name}获胜`):game.winner!==null?`${game.factions[game.winner].name}赢得胜利`:'暂别这一片疆土';
   $('resultDesc').textContent=won?'从一格领土，到整片大陆。这一战，你做到了。':game.winner!==null?'全图已被统一。再出发，下一场胜利或许属于你。':'你的领土已全部失守。调整策略，再出发。';
   $('resultStats').innerHTML=`<div><strong>${game.turn}</strong><span>征战回合</span></div><div><strong>${game.captures}</strong><span>累计攻占</span></div><div><strong>${game.moves}</strong><span>出兵次数</span></div>`;
   $('nextBtn').hidden=!won||config.mode!=='campaign'||config.level===LEVELS.length-1;$('watchBtn').hidden=game.winner!==null;
