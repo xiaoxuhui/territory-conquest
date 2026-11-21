@@ -108,7 +108,7 @@ function advanceResolution(now){
   const phase=game.stepTurn();if(!phase)return;
   if(phase.action?.ok){
     flashActions([phase.action]);
-    if(lastBattle&&phase.action.toId===lastBattle.action.toId&&phase.action.kind==='reinforce')lastBattle.reinforced+=phase.action.amount;
+    if(lastBattle&&phase.action.toId===lastBattle.action.toId&&['reinforce','support'].includes(phase.action.kind))lastBattle.reinforced+=phase.action.amount;
   }
   if(lastBattle&&phase.kind==='growth')lastBattle.grew=phase.changes.find(c=>c.id===lastBattle.action.toId)?.amount||0;
   if(phase.secessions?.length){

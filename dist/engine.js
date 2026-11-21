@@ -20,6 +20,7 @@ export const UNREST_LIMIT=4,UNREST_WINDOW=8,SECESSION_GRACE=12;
 export const ATTITUDES=['和平','中立','敌对'];
 export const NEUTRAL_ATTACK_CHANCE=.01;
 export const DIPLOMACY_IMPROVE_CHANCE=.01,SECESSION_ARMY_MULTIPLIER=10;
+export const MARCH_CHANCE=.01,MARCH_MAX_ARMY=5;
 function newCountry(id,number){
   const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
   const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});
@@ -35,6 +36,7 @@ export class Game {
     this.relations=Array.from({length:players},(_,owner)=>Array.from({length:players},(_,other)=>owner===other?0:1));
     this.attackedBy=Array.from({length:players},()=>Array(players).fill(false));
     this.neutralInitiative=Array(players).fill(null);
+    this.aiMarches=Array(players).fill(null);this.marchDecisionTurn=Array(players).fill(-1);
     this.diplomacySettledTurn=-1;
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,homeland:-1,army:0,capital:-1,unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
@@ -128,6 +130,7 @@ export class Game {
       this.relations.forEach(row=>row.push(1));this.relations.push(Array(this.players).fill(1));this.relations[owner][owner]=0;
       this.attackedBy.forEach(row=>row.push(false));this.attackedBy.push(Array(this.players).fill(false));
       this.neutralInitiative.push(null);
+      this.aiMarches.push(null);this.marchDecisionTurn.push(-1);
       const enemies=new Set(history.filter(e=>Number.isInteger(e.actor)).map(e=>e.actor));enemies.delete(homeland);
       this.relations[owner][homeland]=0;
       for(const enemy of enemies)this.relations[owner][enemy]=2;
@@ -286,6 +289,60 @@ export class Game {
     if(this.automaticElapsed>=0.8){this.automaticElapsed=0;this.waitTurn({defer:true});}
     return [];
   }
+  sharesBorder(a,b){return this.cells.some(c=>c.owner===a&&this.neighbors(c.id).some(id=>this.cells[id].owner===b));}
+  marchPath(owner,target,head){
+    const previous=new Int16Array(this.cells.length).fill(-1),queue=[head];previous[head]=head;
+    for(let q=0;q<queue.length;q++)for(const id of this.neighbors(queue[q])){
+      if(previous[id]>=0)continue;
+      const c=this.cells[id];if(c.owner!==owner&&c.owner!==-1&&c.owner!==target)continue;
+      previous[id]=queue[q];
+      if(c.owner===target){const path=[id];while(path.at(-1)!==head)path.push(previous[path.at(-1)]);return path.reverse();}
+      queue.push(id);
+    }
+    return null;
+  }
+  supportNeighbor(fromId,toId,owner,amount){
+    const from=this.cells[fromId],to=this.cells[toId];
+    if(!this.running||this.paused||this.winner!==null||!from||!to||from.owner!==owner||to.owner<0||to.owner===owner||this.attitude(owner,to.owner)!==0||!this.neighbors(fromId).includes(toId))return {ok:false,reason:'援军只能送往相邻的和平国家'};
+    if(!Number.isInteger(amount)||amount<1||amount>MARCH_MAX_ARMY||amount>=from.army)return {ok:false,reason:'援军需保留驻军，每次最多 5 人'};
+    const fromBefore=from.army,toBefore=to.army;from.army-=amount;to.army+=amount;
+    this.addEvent(`${this.factions[owner].name}送出 ${amount} 人支援${this.factions[to.owner].name}：守军 ${toBefore} + ${amount} = ${to.army}`,'support',owner);
+    return {ok:true,kind:'support',owner,oldOwner:owner,recipient:to.owner,fromId,toId,amount,captured:false,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
+  }
+  advanceMarch(owner){
+    const march=this.aiMarches[owner];if(!march)return null;
+    const attitude=this.attitude(owner,march.target),head=this.cells[march.head];
+    if(!head||head.owner!==owner||attitude!==(march.kind==='support'?0:2)||!this.cells.some(c=>c.owner===march.target)){
+      this.aiMarches[owner]=null;return null;
+    }
+    const path=this.marchPath(owner,march.target,march.head);
+    if(!path){this.aiMarches[owner]=null;return null;}
+    const amount=Math.min(MARCH_MAX_ARMY,head.army-1,Math.max(1,Math.floor(head.army*.1)));
+    if(amount<1)return null;
+    const toId=path[1],arrival=this.cells[toId].owner===march.target;
+    const result=arrival&&march.kind==='support'?this.supportNeighbor(head.id,toId,owner,amount):this.attack(head.id,toId,owner,Math.min(1,(amount+.0001)/head.army));
+    if(!result.ok){this.aiMarches[owner]=null;return null;}
+    if(arrival)this.aiMarches[owner]=null;
+    else {
+      march.head=toId;result.marching=true;
+      const coord=id=>`${String.fromCharCode(65+id%this.w)}${Math.floor(id/this.w)+1}`;
+      this.addEvent(`${this.factions[owner].name}小队向${this.factions[march.target].name}逐格行军：${coord(head.id)} 至 ${coord(toId)}，${amount} 人`,'march',owner);
+    }
+    return result;
+  }
+  tryStartMarch(owner,owned){
+    if(this.marchDecisionTurn[owner]===this.turn)return null;
+    this.marchDecisionTurn[owner]=this.turn;
+    const targets=this.factions.map((_,id)=>id).filter(id=>id!==owner&&this.cells.some(c=>c.owner===id)&&(this.attitude(owner,id)===0||(this.attitude(owner,id)===2&&!this.sharesBorder(owner,id))));
+    if(!targets.length||!owned.some(c=>c.army>=2)||this.rng()>=MARCH_CHANCE)return null;
+    targets.sort((a,b)=>this.attitude(owner,b)-this.attitude(owner,a)||a-b);
+    for(const target of targets)for(const source of [...owned].sort((a,b)=>b.army-a.army)){
+      if(source.army<2||!this.marchPath(owner,target,source.id))continue;
+      this.aiMarches[owner]={target,kind:this.attitude(owner,target)===0?'support':'attack',head:source.id};
+      return this.advanceMarch(owner);
+    }
+    return null;
+  }
   aiMove(owner){
     if(!this.running||this.paused||this.winner!==null)return null;
     const owned=this.cells.filter(c=>c.owner===owner);if(!owned.length)return null;
@@ -294,6 +351,10 @@ export class Game {
       const site=[...owned].sort((a,b)=>(Math.min(b.army,999)-this.aiThreat(b.id,owner)*4)-(Math.min(a.army,999)-this.aiThreat(a.id,owner)*4))[0];
       return this.constructCapital(site.id,owner);
     }
+    const nearbyEnemy=owned.some(c=>this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner&&this.attitude(owner,this.cells[id].owner)===2));
+    if(this.aiMarches[owner]?.kind==='support'&&nearbyEnemy)this.aiMarches[owner]=null;
+    if(this.aiMarches[owner]){const action=this.advanceMarch(owner);if(action||this.aiMarches[owner])return action;}
+    if(!nearbyEnemy){const action=this.tryStartMarch(owner,owned);if(action)return action;}
     if(owned.some(c=>this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner&&this.attitude(owner,this.cells[id].owner)===1&&!this.attackedBy[owner][this.cells[id].owner])))this.prepareNeutralInitiative(owner);
     const counts=Array(this.players).fill(0);this.cells.forEach(c=>{if(c.owner>=0)counts[c.owner]++;});
     const fronts=[];
