@@ -47,7 +47,7 @@ test('tenfold founding uses each joining tile own army once, including values ov
   assert.equal(g.cells[21].army,1200);assert.equal(g.cells[g.spawns[1]].army,initial);assert.deepEqual(g.resolveSecessions(),[]);assert.equal(g.cells[21].army,1200);
 });
 test('a new country keeps its founding attitude for that round and participates in reconciliation next round',()=>{
-  const g=running();g.turn=0;Object.assign(g.cells[12],{owner:0,army:10});g.cells[11].unrestEvents=Array.from({length:4},()=>({turn:0,kind:'drain',actor:0}));
+  const g=running();g.turn=0;Object.assign(g.cells[12],{owner:0,army:10});g.cells[11].homeland=1;g.cells[11].unrestEvents=Array.from({length:4},()=>({turn:0,kind:'capture',actor:0,victim:1}));
   g.waitTurn();assert.equal(g.attitude(2,0),2);assert.equal(g.attitude(0,2),1);assert.equal(g.cells[11].army,230);
   g.waitTurn();assert.equal(g.attitude(2,0),1);assert.equal(g.attitude(0,2),1);assert.equal(g.cells[11].army,233);
 });

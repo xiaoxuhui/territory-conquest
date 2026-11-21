@@ -24,10 +24,11 @@ test('neutral expansion, friendly transfers, invalid moves, insufficient armies 
   Object.assign(g.cells[12],{owner:1,army:100});g.cells[11].army=1;assert.equal(g.attack(11,12,0,1).ok,false);
   g.cells[11].army=20;g.paused=true;assert.equal(g.attack(11,12,0,.5).ok,false);assert.equal(JSON.stringify(g.relations),before);
 });
-test('withdrawal secession is hostile to its parent while the parent can remain peaceful',()=>{
-  const g=running();Object.assign(g.cells[12],{owner:0,army:10});for(let i=0;i<4;i++)g.playTurn(11,12,1);
-  assert.equal(g.factions[2].cause,'drain');assert.equal(g.factions[2].origin,0);assert.equal(g.attitude(2,0),2);assert.equal(g.attitude(0,2),1);
-  for(let i=0;i<12;i++)g.waitTurn();assert.equal(g.attitude(2,0),2);assert.equal(g.attitude(0,2),1);
+test('friendly withdrawals do not create a country or alter any diplomatic direction',()=>{
+  for(const attitude of [0,1,2]){
+    const g=running();g.relations[0][1]=attitude;Object.assign(g.cells[12],{owner:0,army:10});for(let i=0;i<12;i++)g.playTurn(11,12,1);
+    assert.equal(g.players,2);assert.equal(g.secessions,0);assert.equal(g.attitude(0,1),attitude);assert.equal(g.attitude(1,0),1);
+  }
 });
 test('war secession remembers the original homeland even under hostile occupation and excludes reconquest from enemies',()=>{
   const g=running();Object.assign(g.cells[12],{owner:0,army:1});for(let i=0;i<5;i++)flip(g);
@@ -38,9 +39,9 @@ test('war secession remembers the original homeland even under hostile occupatio
 });
 test('new countries expand the full directed matrix without erasing existing relations or affecting another game',()=>{
   const g=running({ai:7});g.relations[1][0]=0;g.declareWar(1);Object.assign(g.cells[12],{owner:1,army:100});g.attack(11,12,0,.5);
-  g.cells[40].owner=0;g.cells[40].unrestEvents=Array.from({length:4},()=>({turn:0,kind:'drain',actor:0}));g.resolveSecessions();
+  g.cells[40].owner=0;g.cells[40].unrestEvents=Array.from({length:4},()=>({turn:0,kind:'capture',actor:1,victim:0}));g.resolveSecessions();
   assert.equal(g.players,9);assert.equal(g.relations.length,9);assert.ok(g.relations.every(row=>row.length===9));assert.equal(g.attitude(1,0),1);
-  assert.equal(g.attitude(8,0),2);assert.equal(g.attitude(0,8),1);assert.equal(g.attitude(8,8),0);
+  assert.equal(g.attitude(8,0),0);assert.equal(g.attitude(8,1),2);assert.equal(g.attitude(0,8),1);assert.equal(g.attitude(8,8),0);
   const fresh=new Game();assert.equal(fresh.attitude(1,0),1);assert.equal(fresh.relations.length,2);
 });
 test('computer target scoring prefers an otherwise equal hostile country over a peaceful country',()=>{

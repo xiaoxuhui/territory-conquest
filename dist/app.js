@@ -213,7 +213,7 @@ function renderDiplomacy(stats=game.stats()){
   const from=Number(select.value),nation=game.factions[from];
   const rows=alive.filter(s=>s.id!==from).map(s=>`<div class="diplomacy-row" data-relation-target="${s.id}"><strong style="color:${s.color}">${s.name}</strong><span>${nation.name}对${s.name}<b class="attitude attitude-${game.attitude(from,s.id)}" data-direction="out">${ATTITUDES[game.attitude(from,s.id)]}</b></span><span>${s.name}对${nation.name}<b class="attitude attitude-${game.attitude(s.id,from)}" data-direction="in">${ATTITUDES[game.attitude(s.id,from)]}</b></span>${game.isHuman(from)&&from===lastController&&game.attitude(from,s.id)!==2?`<button class="secondary declare-war-btn" data-declare-war="${s.id}" ${!game.running||game.paused||game.resolving||game.currentHuman!==from||spectating?'disabled':''}>对${s.name}宣战 · 一次行动</button>`:''}</div>`).join('')||'<p class="diplomacy-empty">当前没有其他存活国家。</p>';
   if($('diplomacyList').innerHTML!==rows)$('diplomacyList').innerHTML=rows;
-  $('diplomacyOrigin').textContent=nation.rebel?`因${nation.cause==='drain'?'持续抽调驻军':'战乱'}独立，原属国：${game.factions[nation.origin].name}`:'初始国家，各方向态度独立变化。';
+  $('diplomacyOrigin').textContent=nation.rebel?`因战乱独立，原属国：${game.factions[nation.origin].name}`:'初始国家，各方向态度独立变化。';
 }
 function renderIntel(){
   const id=hovered??selected;if(id===null){$('tileIntel').innerHTML='<div class="intel-placeholder">◇</div><p>选择一块领土<br><span>查看兵力与进攻信息</span></p>';return;}

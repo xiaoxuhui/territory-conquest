@@ -104,12 +104,12 @@ export class Game {
     const result={ok:true,kind:'diplomacy',owner,oldOwner:owner,fromId:-1,toId:-1,target};
     result.actions=this.finishTurn([{...result}],options);return result;
   }
-  unrest(cell){return cell&&this.turn>=cell.stableUntil?cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW).length:0;}
+  activeUnrest(cell){return cell.unrestEvents.filter(e=>e.kind==='capture'&&this.turn-e.turn<UNREST_WINDOW);}
+  unrest(cell){return cell&&this.turn>=cell.stableUntil?this.activeUnrest(cell).length:0;}
   recordUnrest(cell,kind,details={}){
-    if(this.turn<cell.stableUntil)return;
-    cell.unrestEvents=cell.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW);
+    if(kind!=='capture'||this.turn<cell.stableUntil)return;
+    cell.unrestEvents=this.activeUnrest(cell);
     const turn=this.roundState?this.turn:this.turn+1;
-    if(kind==='drain'&&cell.unrestEvents.some(e=>e.kind===kind&&e.turn===turn))return;
     cell.unrestEvents.push({turn,kind,...details});
   }
   resolveSecessions(){
@@ -122,25 +122,22 @@ export class Game {
       for(let q=0;q<region.length&&region.length<3;q++)for(const id of this.neighbors(region[q].id)){
         const c=this.cells[id];if(region.length<3&&c.owner===oldOwner&&this.unrest(c)>=2&&!region.includes(c))region.push(c);
       }
-      const history=region.flatMap(c=>c.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW));
-      const local=center.unrestEvents.filter(e=>this.turn-e.turn<UNREST_WINDOW),drains=local.filter(e=>e.kind==='drain').length;
-      const cause=drains>0&&drains>=local.length-drains?'drain':'war';
-      const homeland=cause==='drain'?oldOwner:center.homeland>=0?center.homeland:local.find(e=>Number.isInteger(e.victim))?.victim??oldOwner;
+      const history=region.flatMap(c=>this.activeUnrest(c)),local=this.activeUnrest(center),cause='war';
+      const homeland=center.homeland>=0?center.homeland:local.find(e=>Number.isInteger(e.victim))?.victim??oldOwner;
       const owner=this.players++;this.ai++;this.factions.push({...newCountry(owner,++this.secessions),origin:homeland,cause});
       this.relations.forEach(row=>row.push(1));this.relations.push(Array(this.players).fill(1));this.relations[owner][owner]=0;
       this.attackedBy.forEach(row=>row.push(false));this.attackedBy.push(Array(this.players).fill(false));
       this.neutralInitiative.push(null);
-      const enemies=new Set(history.filter(e=>e.kind===(cause==='drain'?'drain':'capture')&&Number.isInteger(e.actor)).map(e=>e.actor));
-      if(cause==='drain')enemies.add(oldOwner);else enemies.delete(homeland);
-      if(cause==='war')this.relations[owner][homeland]=0;
+      const enemies=new Set(history.filter(e=>Number.isInteger(e.actor)).map(e=>e.actor));enemies.delete(homeland);
+      this.relations[owner][homeland]=0;
       for(const enemy of enemies)this.relations[owner][enemy]=2;
       this.capitalLost.push(false);this.aiPlans.push(null);this.aiAnchors.push(center.id);this.spawns.push(center.id);
       const armyChanges=region.map(c=>({id:c.id,before:c.army,after:c.army*SECESSION_ARMY_MULTIPLIER}));
       for(const c of region){c.army*=SECESSION_ARMY_MULTIPLIER;c.owner=owner;c.homeland=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
       center.capital=owner;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;this.aiPlans[oldOwner]=null;
       const location=`${String.fromCharCode(65+center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
-      this.addEvent(`${location}一带因反复易手或抽调驻军发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，原格兵力 ×${SECESSION_ARMY_MULTIPLIER}，电脑控制）`,'secession',owner);
-      this.addEvent(cause==='drain'?`${this.factions[owner].name}因持续被抽调驻军，对${this.factions[oldOwner].name}保持敌对`:`${this.factions[owner].name}因战乱独立，对原属国${this.factions[homeland].name}保持和平${enemies.size?`，敌视进攻者${[...enemies].map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
+      this.addEvent(`${location}一带因反复易手发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，原格兵力 ×${SECESSION_ARMY_MULTIPLIER}，电脑控制）`,'secession',owner);
+      this.addEvent(`${this.factions[owner].name}因战乱独立，对原属国${this.factions[homeland].name}保持和平${enemies.size?`，敌视进攻者${[...enemies].map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
       countries.push({owner,oldOwner,homeland,cause,capital:center.id,cells:region.map(c=>c.id),armyChanges});
     }
@@ -168,7 +165,6 @@ export class Game {
     }
     const kind=oldOwner===owner?'reinforce':'attack';
     if(captured&&oldOwner>=0&&!hostileAttack)this.recordUnrest(to,'capture',{actor:owner,victim:oldOwner});
-    if(kind==='reinforce'&&amount>=3&&amount/fromBefore>=.75)this.recordUnrest(from,'drain',{actor:owner});
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${this.factions[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
     else if(oldOwner>=0)this.addEvent(`${this.factions[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);

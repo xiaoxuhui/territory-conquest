@@ -17,10 +17,10 @@ test('four recent neutral-attitude takeovers form a country with tenfold armies 
   assert.equal(g.aiPlans[2],null);assert.equal(g.aiAnchors[2],12);assert.match(g.events.find(e=>e.kind==='secession').text,/成立新国1/);
   calls.length=0;g.waitTurn();assert.deepEqual([...calls].sort(),[1,2]);
 });
-test('repeated large friendly troop withdrawals cause secession but half transfers and attacks do not',()=>{
+test('repeated large friendly withdrawals and half transfers create no unrest or secession',()=>{
   const g=running();Object.assign(g.cells[12],{owner:0,army:10});
-  for(let i=0;i<4;i++)assert.equal(g.playTurn(11,12,1).ok,true);
-  assert.equal(g.secessions,1);assert.equal(g.cells[11].owner,2);assert.equal(g.cells[11].army,40);assert.equal(g.capitalLost[0],true);assert.equal(g.cells[12].owner,0);
+  for(let i=0;i<20;i++)assert.equal(g.playTurn(11,12,1).ok,true);
+  assert.equal(g.secessions,0);assert.equal(g.cells[11].owner,0);assert.equal(g.unrest(g.cells[11]),0);assert.equal(g.capitalLost[0],false);assert.equal(g.cells[12].owner,0);
   const safe=running();Object.assign(safe.cells[12],{owner:0,army:10});
   for(let i=0;i<8;i++){safe.cells[11].army=100;safe.playTurn(11,12,.5);}
   assert.equal(safe.unrest(safe.cells[11]),0);assert.equal(safe.secessions,0);
@@ -63,4 +63,11 @@ test('neutral capture, failed attacks and invalid actions create no unrest or ne
   const g=running();g.attack(11,12,0,.5);assert.equal(g.unrest(g.cells[12]),0);
   const state=JSON.stringify(g.cells);assert.equal(g.attack(11,20,0,1).ok,false);assert.equal(JSON.stringify(g.cells),state);
   g.paused=true;assert.deepEqual(g.resolveSecessions(),[]);assert.equal(g.secessions,0);
+});
+test('old troop-withdrawal records are ignored and cannot be added back to active unrest',()=>{
+  const g=running(),cell=g.cells[11];cell.unrestEvents=Array.from({length:8},()=>({turn:0,kind:'drain',actor:0}));
+  assert.equal(g.unrest(cell),0);assert.deepEqual(g.resolveSecessions(),[]);g.recordUnrest(cell,'drain',{actor:0});assert.equal(g.unrest(cell),0);
+  cell.unrestEvents.push(...Array.from({length:3},()=>({turn:0,kind:'capture',actor:1,victim:0})));
+  assert.equal(g.unrest(cell),3);assert.deepEqual(g.resolveSecessions(),[]);g.recordUnrest(cell,'capture',{actor:1,victim:0});
+  assert.equal(g.unrest(cell),4);assert.equal(g.resolveSecessions().length,1);assert.equal(g.factions[2].cause,'war');assert.equal(g.attitude(2,0),0);assert.equal(g.attitude(2,1),2);
 });
