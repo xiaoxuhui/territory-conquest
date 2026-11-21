@@ -27,8 +27,8 @@ function setupGame(){
     frag.append(el);return el;
   });$('board').replaceChildren(frag);
   factionEls=FACTIONS.slice(0,game.players).map((f,id)=>{
-    const el=document.createElement('div');el.className='faction-row';el.style.setProperty('--faction',f.color);
-    el.innerHTML=`<span class="faction-name"><span class="faction-symbol">${f.symbol}</span>${f.name}<span class="faction-you">${game.isHuman(id)?'P'+(id+1):'电脑'}</span></span><span class="faction-numbers"><strong>1</strong><i>/</i><span>20</span></span>`;return el;
+    const el=document.createElement('div');el.className='faction-column';el.dataset.factionId=id;el.setAttribute('role','listitem');el.style.setProperty('--faction',f.color);
+    el.innerHTML=`<div class="faction-bar-track"><div class="faction-bar"><strong class="faction-bar-value">1</strong></div></div><span class="faction-bar-name">${f.name}</span><span class="faction-bar-controller">${game.isHuman(id)?'P'+(id+1):'电脑'}</span>`;return el;
   });$('factionList').replaceChildren(...factionEls);renderSettings();render();
 }
 function renderSettings(){
@@ -149,7 +149,12 @@ function render(){
   else{$('hintTitle').textContent=game.humans>1?`轮到玩家 ${lastController+1} · ${faction.name}`:'轮到你了，慢慢规划';$('hintText').textContent='选中己方领土出兵，或蓄兵一回合。';}
   const stats=game.stats(),mine=lastController===null?stats.reduce((a,b)=>a.land>=b.land?a:b):stats[lastController],total=game.cells.length;
   $('occupationLabel').textContent=lastController===null?'领先阵营占领率':`${faction.name}占领率`;
-  stats.forEach((s,id)=>{const row=factionEls[id];row.classList.toggle('dead',s.land===0);row.classList.toggle('active-controller',id===game.currentHuman);row.querySelector('.faction-numbers strong').textContent=s.land;row.querySelector('.faction-numbers>span').textContent=s.land?s.army:'出局';});
+  const chartMax=Math.max(2,...stats.map(s=>s.land));
+  $('factionList').style.setProperty('--faction-count',stats.length);
+  stats.forEach((s,id)=>{const column=factionEls[id];column.dataset.land=s.land;column.classList.toggle('dead',s.land===0);column.classList.toggle('current-faction',id===game.currentHuman);column.querySelector('.faction-bar').style.height=`${s.land/chartMax*100}%`;column.querySelector('.faction-bar-value').textContent=s.land;column.querySelector('.faction-bar-controller').textContent=s.land?(s.human?'P'+(id+1):'电脑'):'出局';column.title=`${s.name}：${s.land} 格领土，${s.army} 总兵力`;column.setAttribute('aria-label',column.title);});
+  const ranked=[...stats].sort((a,b)=>a.land-b.land||a.id-b.id);
+  const ordered=ranked.map(s=>factionEls[s.id]);
+  if(ordered.some((el,i)=>$('factionList').children[i]!==el))$('factionList').replaceChildren(...ordered);
   $('aliveCount').textContent=`${stats.filter(s=>s.land).length} 方存活`;
   $('occupation').innerHTML=`${(mine.land/total*100).toFixed(1)}<small>%</small>`;$('occupationBar').style.width=`${mine.land/total*100}%`;
   const neutral=total-stats.reduce((s,f)=>s+f.land,0);$('neutralCount').textContent=`${neutral} 格`;
