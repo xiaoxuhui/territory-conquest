@@ -31,7 +31,8 @@
       <div class="tabs" role="tablist" aria-label="对战模式"><button id="campaignTab" class="active" role="tab" aria-selected="true">关卡挑战</button><button id="customTab" role="tab" aria-selected="false">自定义对战</button></div>
       <div id="campaignSettings"><div class="field-heading"><span>选择关卡</span><span class="subtle" id="completedLabel">0 / 6 完成</span></div><div id="levelList" class="level-list"></div></div>
       <div id="customSettings" hidden>
-        <label class="field-heading" for="mapSize">地图大小</label><select id="mapSize"><option value="10,8">小型平原 · 10 × 8</option><option value="14,10" selected>中型大陆 · 14 × 10</option><option value="18,12">广袤世界 · 18 × 12</option></select>
+        <label class="field-heading" for="mapSize">地图大小</label><select id="mapSize"><option value="10,10" selected>小型平原 · 10 × 10</option><option value="30,30">中型大陆 · 30 × 30</option><option value="100,100">广袤世界 · 100 × 100</option></select>
+        <p class="small-note">大地图可在地图内横向、纵向滚动查看。</p>
         <div class="field-heading"><span>人类玩家</span><span class="subtle">0–8 位</span></div><div class="stepper"><button id="minusHuman" aria-label="减少人类玩家">−</button><span><strong id="humanCount">1</strong> 位人类</span><button id="plusHuman" aria-label="增加人类玩家">+</button></div>
         <div class="field-heading"><span>电脑玩家</span><span class="subtle">0–8 位</span></div><div class="stepper"><button id="minusAI" aria-label="减少电脑对手">−</button><span><strong id="aiCount">3</strong> 位电脑</span><button id="plusAI" aria-label="增加电脑对手">+</button></div><p id="playerSetupNote" class="small-note">人类与电脑合计 1–8 位，所有阵营从一块领土和 20 兵力开始。</p>
       </div>

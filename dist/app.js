@@ -1,9 +1,9 @@
-import {Game,LEVELS,UNREST_LIMIT,ATTITUDES} from './engine.js';
+import {Game,LEVELS,UNREST_LIMIT,ATTITUDES,columnLabel} from './engine.js';
 const $=id=>document.getElementById(id);
 const formatTime=t=>`${String(Math.floor(t/60)).padStart(2,'0')}:${String(Math.floor(t%60)).padStart(2,'0')}`;
 let wins=[];
 try{const saved=JSON.parse(localStorage.getItem('territory-wins')||'[]');if(Array.isArray(saved))wins=saved.filter(n=>Number.isInteger(n)&&n>=0&&n<6);}catch{}
-let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:14,h:10,observerMode:'continuous',observerSpeed:1};
+let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:10,h:10,observerMode:'continuous',observerSpeed:1};
 let game,selected=null,hovered=null,ratio=.5,sound=false,spectating=false,resultShown=false,pausedByHelp=false,pendingReset=null,resetWasPaused=false,toastTimer,audioCtx;
 let tiles=[],factionEls=[],lastLog='',lastFrame=performance.now(),renderTimer=0,resolutionAt=0,lastBattle=null,lastController=0,playbackTime=0;
 const flashes=new Map();
@@ -22,8 +22,9 @@ function setupGame(){
   $('modeLabel').textContent=config.mode==='campaign'?'关卡挑战':'自定义对战';
   $('mapInfo').textContent=`${game.w} × ${game.h} 平原`;$('factionInfo').textContent=`${game.humans} 人类 · ${game.ai} 电脑`;
   $('board').style.setProperty('--cols',game.w);$('board').style.setProperty('--rows',game.h);
+  const mapArea=$('board').closest('.map-area');mapArea.classList.toggle('large-map',game.w>20||game.h>20);mapArea.style.setProperty('--cols',game.w);mapArea.style.setProperty('--rows',game.h);mapArea.scrollTop=0;mapArea.scrollLeft=0;
   $('colCoords').style.setProperty('--cols',game.w);$('rowCoords').style.setProperty('--rows',game.h);
-  $('colCoords').innerHTML=Array.from({length:game.w},(_,x)=>`<span>${String.fromCharCode(65+x)}</span>`).join('');
+  $('colCoords').innerHTML=Array.from({length:game.w},(_,x)=>`<span>${columnLabel(x)}</span>`).join('');
   $('rowCoords').innerHTML=Array.from({length:game.h},(_,y)=>`<span>${String(y+1).padStart(2,'0')}</span>`).join('');
   const frag=document.createDocumentFragment();tiles=game.cells.map(c=>{
     const el=document.createElement('button');el.className='cell';el.dataset.id=c.id;el.setAttribute('aria-keyshortcuts','ArrowUp ArrowDown ArrowLeft ArrowRight');
@@ -83,7 +84,7 @@ function clickTile(id){
   if(cell.owner===lastController){selected=id;render();}
   else toast(selected===null?`当前由${game.factions[lastController].name}玩家行动，请选择该阵营领土`:'只能进攻上下左右相邻的格子');
 }
-function coord(id){return `${String.fromCharCode(65+id%game.w)}${Math.floor(id/game.w)+1}`;}
+function coord(id){return `${columnLabel(id%game.w)}${Math.floor(id/game.w)+1}`;}
 function flashActions(actions){for(const a of actions||[])if(a.ok)flashes.set(a.toId,{until:performance.now()+350,captured:a.captured});}
 function waitTurn(){if(game.continuous)return;const result=game.waitTurn({defer:true});if(!result.ok)return;lastBattle=null;resolutionAt=playbackTime+180;flashActions(result.actions);if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;checkResult();render();}
 function moveCapital(){
@@ -145,8 +146,10 @@ function render(){
   const now=performance.now();
   game.cells.forEach((c,i)=>{
     const el=tiles[i],f=c.owner>=0?game.factions[c.owner]:null,flash=flashes.get(i);
-    const unrest=game.unrest(c);
-    const cls=`cell ${f?'owned':'empty'} ${game.isCapital(c)?'capital':''} ${unrest>=2?'unstable':''} ${i===selected?'selected':''} ${neighbors.includes(i)?'reachable':''} ${game.w>=16?'small':''} ${flash&&flash.until>now?(flash.captured?'flash':'attacked'):''}`;
+    const unrest=f?game.unrest(c):0,capital=game.isCapital(c),isSelected=i===selected,reachable=neighbors.includes(i),flashClass=flash&&flash.until>now?(flash.captured?'flash':'attacked'):'';
+    const renderKey=`${c.owner}|${c.army}|${capital}|${isSelected}|${reachable}|${unrest}|${flashClass}|${c.owner>=0&&c.owner===lastController}`;
+    if(el._renderKey===renderKey)return;el._renderKey=renderKey;
+    const cls=`cell ${f?'owned':'empty'} ${capital?'capital':''} ${unrest>=2?'unstable':''} ${isSelected?'selected':''} ${reachable?'reachable':''} ${game.w>=16?'small':''} ${flashClass}`;
     if(el.className!==cls)el.className=cls;
     const label=`${coord(i)}，${f?(c.owner===lastController?'你的领土':f.name+'领土')+'，'+c.army+' 兵力'+(game.isCapital(c)?'，首都':'')+`，动荡 ${unrest}/${UNREST_LIMIT}`:'未占领'}`;
     el.title=label;

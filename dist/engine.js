@@ -21,6 +21,7 @@ export const ATTITUDES=['和平','中立','敌对'];
 export const NEUTRAL_ATTACK_CHANCE=.01;
 export const DIPLOMACY_IMPROVE_CHANCE=.01,DIPLOMACY_WORSEN_CHANCE=.01,SECESSION_ARMY_MULTIPLIER=10;
 export const MARCH_CHANCE=.01,MARCH_MAX_ARMY=5;
+export function columnLabel(index){let label='';for(let n=index+1;n>0;n=Math.floor((n-1)/26))label=String.fromCharCode(65+(n-1)%26)+label;return label;}
 function newCountry(id,number){
   const hue=(id*137.508)%360,s=.58,l=.65,a=s*Math.min(l,1-l);
   const rgb=[0,8,4].map(n=>{const k=(n+hue/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1))));});
@@ -150,7 +151,7 @@ export class Game {
       const armyChanges=region.map(c=>({id:c.id,before:c.army,after:c.army*SECESSION_ARMY_MULTIPLIER}));
       for(const c of region){c.army*=SECESSION_ARMY_MULTIPLIER;c.owner=owner;c.homeland=owner;c.capital=-1;c.unrestEvents=[];c.stableUntil=this.turn+SECESSION_GRACE;}
       center.capital=owner;this.capitalLost[oldOwner]=this.capitals(oldOwner).length===0;this.aiPlans[oldOwner]=null;
-      const location=`${String.fromCharCode(65+center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
+      const location=`${columnLabel(center.id%this.w)}${Math.floor(center.id/this.w)+1}`;
       this.addEvent(`${location}一带因反复易手发生分裂，脱离${this.factions[oldOwner].name}，成立${this.factions[owner].name}（${region.length} 格，原格兵力 ×${SECESSION_ARMY_MULTIPLIER}，电脑控制）`,'secession',owner);
       this.addEvent(`${this.factions[owner].name}因战乱独立，对原属国${this.factions[homeland].name}保持和平${enemies.size?`，敌视进攻者${[...enemies].map(id=>this.factions[id].name).join('、')}`:''}`,'diplomacy',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
@@ -180,7 +181,7 @@ export class Game {
     }
     const kind=oldOwner===owner?'reinforce':'attack';
     if(captured&&oldOwner>=0&&!hostileAttack)this.recordUnrest(to,'capture',{actor:owner,victim:oldOwner});
-    const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
+    const location=`${columnLabel(toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${this.factions[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
     else if(oldOwner>=0)this.addEvent(`${this.factions[owner].name}出兵 ${amount} 进攻 ${location}：守军 ${toBefore} − ${Math.min(amount,toBefore)} = ${Math.max(0,toBefore-amount)}`,'battle',owner);
     if(this.isHuman(owner)){this.moves++;if(captured)this.captures++;}
@@ -200,7 +201,7 @@ export class Game {
     if(this.isCapital(target))return {ok:false,reason:'这里已经是首都，请选择己方普通领土'};
     if(this.capitals(owner).length>=2)return {ok:false,reason:'已有两座首都，请使用迁都'};
     this.capitalLost[owner]=false;target.capital=owner;this.aiPlans[owner]=null;
-    const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
+    const location=`${columnLabel(toId%this.w)}${Math.floor(toId/this.w)+1}`;
     this.addEvent(`${this.factions[owner].name}在 ${location} 建设了新首都`,'capital-build',owner);
     return {ok:true,kind:'capital-build',owner,oldOwner:owner,fromId:-1,toId,amount:0,captured:false};
   }
@@ -222,7 +223,7 @@ export class Game {
     const fromId=previous.id;
     previous.capital=-1;target.capital=owner;
     this.aiPlans[owner]=null;
-    const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
+    const location=`${columnLabel(toId%this.w)}${Math.floor(toId/this.w)+1}`;
     this.addEvent(`${this.factions[owner].name}迁都至 ${location}`,'capital',owner);
     return {ok:true,kind:'capital',owner,oldOwner:owner,fromId,toId,amount:0,captured:false};
   }
@@ -337,7 +338,7 @@ export class Game {
     if(arrival)this.aiMarches[owner]=null;
     else {
       march.head=toId;result.marching=true;
-      const coord=id=>`${String.fromCharCode(65+id%this.w)}${Math.floor(id/this.w)+1}`;
+      const coord=id=>`${columnLabel(id%this.w)}${Math.floor(id/this.w)+1}`;
       this.addEvent(`${this.factions[owner].name}小队向${this.factions[march.target].name}逐格行军：${coord(head.id)} 至 ${coord(toId)}，${amount} 人`,'march',owner);
     }
     return result;
