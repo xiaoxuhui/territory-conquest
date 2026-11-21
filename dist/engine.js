@@ -156,6 +156,7 @@ export class Game {
     const amount=this.sent(from,ratio);
     if(amount<1)return {ok:false,reason:'兵力不足，至少留守 1 名士兵'};
     const oldOwner=to.owner,fromBefore=from.army,toBefore=to.army;from.army-=amount;
+    const hostileAttack=oldOwner>=0&&oldOwner!==owner&&this.attitude(owner,oldOwner)===2;
     if(oldOwner>=0&&oldOwner!==owner){if(to.homeland<0)to.homeland=oldOwner;this.reactToAttack(owner,oldOwner);}
     let captured=false;
     if(to.owner===owner)to.army+=amount;
@@ -166,7 +167,7 @@ export class Game {
       this.addEvent(`${this.factions[oldOwner].name}首都被攻占，原首都失效`,'capital-lost',oldOwner);
     }
     const kind=oldOwner===owner?'reinforce':'attack';
-    if(captured&&oldOwner>=0)this.recordUnrest(to,'capture',{actor:owner,victim:oldOwner});
+    if(captured&&oldOwner>=0&&!hostileAttack)this.recordUnrest(to,'capture',{actor:owner,victim:oldOwner});
     if(kind==='reinforce'&&amount>=3&&amount/fromBefore>=.75)this.recordUnrest(from,'drain',{actor:owner});
     const location=`${String.fromCharCode(65+toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${this.factions[owner].name}增援 ${location}：${toBefore} + ${amount} = ${to.army}`,'reinforce',owner);
@@ -177,7 +178,7 @@ export class Game {
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
     }
     this.checkWinner();
-    return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
+    return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,hostileAttack,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
   }
   checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.addEvent(`${this.factions[owner].name}占领全图，获得胜利！`,'victory',owner);}}
   get resolving(){return this.pendingTurn!==null;}

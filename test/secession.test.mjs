@@ -4,10 +4,11 @@ import {Game,FACTIONS,UNREST_LIMIT,UNREST_WINDOW,SECESSION_GRACE} from '../dist/
 function running(options={}){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.running=true;g.aiMove=()=>null;return g;}
 function flip(g){
   const target=g.cells[12],owner=1-target.owner,source=g.cells[owner===0?11:13];
+  g.relations[owner][target.owner]=1;g.attackedBy[owner][target.owner]=true;
   Object.assign(source,{owner,army:100});target.army=1;
   assert.equal(g.attack(source.id,12,owner,1).captured,true);
 }
-test('four recent hostile takeovers form a country with tenfold armies and no same-round action',()=>{
+test('four recent neutral-attitude takeovers form a country with tenfold armies and no same-round action',()=>{
   const g=running();Object.assign(g.cells[12],{owner:0,army:1});const calls=[];g.aiMove=id=>{calls.push(id);return null;};
   for(let i=0;i<UNREST_LIMIT-1;i++){flip(g);g.waitTurn();assert.equal(g.players,2);}
   flip(g);assert.equal(g.unrest(g.cells[12]),4);assert.equal(g.players,2);const army=g.cells[12].army;

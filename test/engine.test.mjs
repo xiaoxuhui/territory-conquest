@@ -247,8 +247,9 @@ test('AI waits for enough support to survive a counterattack and uses half when 
 test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
   for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
     const g=warGame({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
-    // Keep all new states at war for this bounded conquest regression.
-    while(g.winner===null&&g.turn<12000){g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.waitTurn();}
+    // Hostile captures no longer split. The largest reproduced seed now
+    // completes in 17154 rounds with all countries kept at war.
+    while(g.winner===null&&g.turn<20000){g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.waitTurn();}
     assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
     assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);
   }
