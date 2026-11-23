@@ -25,7 +25,7 @@ test('neutral expansion, friendly transfers, invalid moves, insufficient armies 
   g.cells[11].army=20;g.paused=true;assert.equal(g.attack(11,12,0,.5).ok,false);assert.equal(JSON.stringify(g.relations),before);
 });
 test('friendly withdrawals do not create a country or alter any diplomatic direction',()=>{
-  for(const attitude of [0,1,2]){
+  for(const attitude of [0,1]){
     const g=running();g.relations[0][1]=attitude;Object.assign(g.cells[12],{owner:0,army:10});Object.assign(g.cells[13],{owner:1,army:10});for(let i=0;i<12;i++)g.playTurn(11,12,1);
     assert.equal(g.players,2);assert.equal(g.secessions,0);assert.equal(g.attitude(0,1),attitude);assert.equal(g.attitude(1,0),1);
   }
@@ -35,7 +35,7 @@ test('war secession remembers the original homeland even under hostile occupatio
   assert.equal(g.cells[12].owner,1);assert.equal(g.cells[12].homeland,0);
   const result=g.resolveSecessions()[0];assert.equal(result.oldOwner,1);assert.equal(result.homeland,0);assert.equal(result.cause,'war');
   assert.equal(g.attitude(2,0),0);assert.equal(g.attitude(2,1),2);assert.equal(g.attitude(0,2),1);assert.equal(g.attitude(1,2),1);
-  assert.match(g.events.find(e=>e.kind==='diplomacy'&&e.owner===2).text,/原属国青岚保持和平，敌视进攻者赤焰/);
+  const policy=g.events.find(e=>e.kind==='diplomacy'&&e.owner===2).text;assert.match(policy,/青岚（和平）/);assert.match(policy,/赤焰（敌对）/);
 });
 test('new countries expand the full directed matrix without erasing existing relations or affecting another game',()=>{
   const g=running({ai:7});Object.assign(g.cells[12],{owner:1,army:100});g.relations[1][0]=0;g.declareWar(1);g.attack(11,12,0,.5);

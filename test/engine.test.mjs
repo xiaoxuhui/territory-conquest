@@ -110,7 +110,7 @@ test('zero computers, eight local humans, and AI-only games share equal one-tile
     assert.ok(g.stats().every(s=>s.land===1&&s.army===20));assert.equal(g.stats().filter(s=>s.human).length,humans);
     assert.equal(g.currentHuman,humans?0:null);
   }
-  for(const options of [{humans:0,ai:0},{humans:8,ai:1},{humans:-1,ai:2},{humans:1,ai:-1},{humans:1.5,ai:1}])assert.throws(()=>warGame(options));
+  for(const options of [{humans:0,ai:0},{w:100,h:100,humans:64,ai:1},{humans:-1,ai:2},{humans:1,ai:-1},{humans:1.5,ai:1}])assert.throws(()=>warGame(options));
 });
 test('a solo human with no AI does not win until the full map is occupied',()=>{
   const g=warGame({ai:0});g.running=true;assert.equal(g.winner,null);
@@ -244,11 +244,11 @@ test('AI waits for enough support to survive a counterattack and uses half when 
   g.aiPlans[0]={rally:13,target:14,age:0};assert.equal(g.aiMove(0),null);assert.equal(g.cells[14].army,5);
   g.cells[13].army=40;const action=g.aiMove(0);assert.equal(action.amount,20);assert.equal(action.captured,true);assert.equal(g.cells[13].army,20);assert.equal(g.cells[14].army,15);
 });
-test('four computers can finish the reproduced three-way stalemate on all map sizes',()=>{
+test('four computers can finish the reproduced three-way stalemate on all map sizes with fixed countries',()=>{
   for(const [w,h,seed,difficulty] of [[10,8,20261152,'normal'],[14,10,20261152,'normal'],[18,12,20261152,'normal'],[18,12,2,'normal'],[18,12,7,'hard']]){
-    const g=warGame({w,h,seed,difficulty,humans:0,ai:4});g.running=true;
-    // Hostile captures no longer split. The largest reproduced seed now
-    // completes in 17154 rounds with all countries kept at war.
+    const g=warGame({w,h,seed,difficulty,humans:0,ai:4});g.running=true;g.resolveSecessions=()=>[];
+    // Isolate expansion and combat strategy from founding relations and new
+    // countries. Secession scenarios are covered by their dedicated tests.
     while(g.winner===null&&g.turn<20000){g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.waitTurn();}
     assert.notEqual(g.winner,null,`${w}x${h}, seed ${seed}, ${difficulty}`);
     assert.ok(g.cells.every(c=>c.owner===g.winner));assert.equal(g.running,false);

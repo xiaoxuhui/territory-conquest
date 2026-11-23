@@ -1,32 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Game,DIPLOMACY_WORSEN_CHANCE} from '../dist/engine.js';
-function touching(){const g=new Game();g.running=true;g.turn=1;Object.assign(g.cells[12],{owner:1,army:10});return g;}
-test('one-percent deterioration lowers peace to neutral and neutral to hostile in only the selected direction',()=>{
-  assert.equal(DIPLOMACY_WORSEN_CHANCE,.01);
-  for(const [before,after] of [[0,1],[1,2],[2,2]])for(const [roll,from,to] of [[.015,0,1],[.025,1,0]]){
-    const g=touching();g.relations[from][to]=before;g.relations[to][from]=0;g.rng=()=>roll;
-    const changes=g.resolveDiplomacy();assert.equal(g.attitude(from,to),after);assert.equal(g.attitude(to,from),0);assert.equal(changes.length,before===2?0:1);
-    if(changes.length){assert.equal(changes[0].kind,'worsen');assert.equal(changes[0].from,from);assert.match(g.events[0].text,/关系恶化/);}
-  }
+import {Game,RELATION_LEVELS,combinedDiplomacyChance,DIPLOMACY_IMPROVE_CHANCE,DIPLOMACY_WORSEN_CHANCE} from '../dist/engine.js';
+function board(options={}){const g=new Game({w:6,h:4,humans:1,ai:1,...options});g.cells.forEach(c=>Object.assign(c,{owner:-1,army:0,capital:-1}));for(const [owner,id] of [0,1,5,18].slice(0,g.players).entries())Object.assign(g.cells[id],{owner,army:20});if(g.players>2)for(const id of [6,7])Object.assign(g.cells[id],{owner:2,army:20});g.running=true;g.turn=1;g.aiMove=()=>null;roll(g,.99,.99);return g;}
+function roll(g,up,down){let draws=0;g.rng=()=>[up,down][draws++%2];return ()=>draws;}
+function close(a,b){assert.ok(Math.abs(a-b)<1e-12);}
+
+test('global downward movement has a one-percent base and shifts every directed rank by exactly one',()=>{
+ assert.equal(DIPLOMACY_WORSEN_CHANCE,.01);const g=board({ai:2}),pairs=[[0,1],[0,2],[1,0],[1,2],[2,0],[2,1]],levels=[0,1,2,3,4,2];
+ pairs.forEach(([a,b],i)=>g.setRelationLevel(a,b,levels[i]));roll(g,.99,0);const result=g.resolveDiplomacy();assert.equal(result[0].kind,'global-down');pairs.forEach(([a,b],i)=>assert.equal(g.relationLevel(a,b),Math.min(4,levels[i]+1)));
 });
-test('exact boundaries give improvement and each directed deterioration their own disjoint one percent',()=>{
-  for(const [roll,ab,ba] of [[0,0,0],[.009999,0,0],[.01,2,1],[.019999,2,1],[.02,1,2],[.029999,1,2],[.03,1,1],[.999,1,1]]){
-    const g=touching();g.rng=()=>roll;const changes=g.resolveDiplomacy();assert.equal(g.attitude(0,1),ab);assert.equal(g.attitude(1,0),ba);assert.ok(changes.length<=1);
-  }
+test('persistent peace falls to ordinary peace and can then change normally',()=>{
+ const g=board();g.setRelationLevel(0,1,0);roll(g,.99,0);g.resolveDiplomacy();assert.equal(g.relationLevel(0,1),1);assert.equal(g.isPersistentRelation(0,1),false);
+ g.turn++;g.resolveDiplomacy();assert.equal(g.attitude(0,1),1);assert.equal(g.relationLevel(0,1),2);
 });
-test('peaceful pairs can deteriorate, hostility is capped, and one round cannot apply twice',()=>{
-  const g=touching();g.relations[0][1]=0;g.relations[1][0]=0;g.rng=()=>.015;
-  g.resolveDiplomacy();assert.equal(g.attitude(0,1),1);assert.deepEqual(g.resolveDiplomacy(),[]);assert.equal(g.attitude(0,1),1);
-  g.turn++;g.resolveDiplomacy();assert.equal(g.attitude(0,1),2);g.turn++;assert.deepEqual(g.resolveDiplomacy(),[]);assert.equal(g.attitude(0,1),2);
+test('ordinary hostility falls to persistent hostility and the bottom rank is capped',()=>{
+ const g=board();g.setRelationLevel(0,1,3);g.setRelationLevel(1,0,4);roll(g,.99,0);g.resolveDiplomacy();assert.equal(g.relationLevel(0,1),4);assert.equal(g.relationLevel(1,0),4);assert.equal(g.isPersistentHostile(0,1),true);
 });
-test('distant asymmetric relations freeze for any improvement or worsening outcome',()=>{
-  for(const roll of [0,.015,.025]){
-    const g=new Game();g.running=true;g.turn=1;g.relations[0][1]=0;g.relations[1][0]=2;let draws=0;g.rng=()=>{draws++;return roll;};
-    for(let i=0;i<50;i++){g.resolveDiplomacy();g.turn++;}assert.equal(g.attitude(0,1),0);assert.equal(g.attitude(1,0),2);assert.equal(draws,0);
-  }
-});
-test('paused and completed games do not deteriorate and contact resumes the original attitude',()=>{
-  const g=touching();g.relations[0][1]=0;g.rng=()=>.015;g.paused=true;assert.deepEqual(g.resolveDiplomacy(),[]);assert.equal(g.attitude(0,1),0);
-  g.paused=false;g.running=false;assert.deepEqual(g.resolveDiplomacy(),[]);g.running=true;g.resolveDiplomacy();assert.equal(g.attitude(0,1),1);
+test('global worsening keeps the exact one-percent boundary and runs only once per round',()=>{
+ for(const [value,rank] of [[.009999,3],[.01,2]]){const g=board(),draws=roll(g,.99,value);g.resolveDiplomacy();assert.equal(g.relationLevel(0,1),rank);for(let i=0;i<5;i++)g.resolveDiplomacy();assert.equal(draws(),2);}
 });

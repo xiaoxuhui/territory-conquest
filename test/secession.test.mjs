@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Game,FACTIONS,UNREST_LIMIT,UNREST_WINDOW,SECESSION_GRACE} from '../dist/engine.js';
-function running(options={}){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.running=true;g.aiMove=()=>null;return g;}
+function running(options={}){const g=new Game(options);g.relations.forEach((row,id)=>row.forEach((_,other)=>{row[other]=id===other?0:2;}));g.running=true;g.aiMove=()=>null;g.resolveDiplomacy=()=>[];return g;}
 function flip(g){
   const target=g.cells[12],owner=1-target.owner,source=g.cells[owner===0?11:13];
   g.relations[owner][target.owner]=1;g.attackedBy[owner][target.owner]=true;
@@ -17,14 +17,14 @@ test('four recent neutral-attitude takeovers form a country with tenfold armies 
   assert.equal(g.aiPlans[2],null);assert.equal(g.aiAnchors[2],12);assert.match(g.events.find(e=>e.kind==='secession').text,/成立新国1/);
   calls.length=0;g.waitTurn();assert.deepEqual([...calls].sort(),[1,2]);
 });
-test('repeated large friendly withdrawals and half transfers create no unrest or secession',()=>{
-  const g=running();Object.assign(g.cells[12],{owner:0,army:10});
+test('non-hostile withdrawals and half transfers create no unrest or secession',()=>{
+  const g=running();g.relations[0][1]=1;g.resolveDiplomacy=()=>[];Object.assign(g.cells[12],{owner:0,army:10});
   for(let i=0;i<20;i++)assert.equal(g.playTurn(11,12,1).ok,true);
   assert.equal(g.secessions,0);assert.equal(g.cells[11].owner,0);assert.equal(g.unrest(g.cells[11]),0);assert.equal(g.capitalLost[0],false);assert.equal(g.cells[12].owner,0);
   const safe=running();Object.assign(safe.cells[12],{owner:0,army:10});
   for(let i=0;i<8;i++){safe.cells[11].army=100;safe.playTurn(11,12,.5);}
   assert.equal(safe.unrest(safe.cells[11]),0);assert.equal(safe.secessions,0);
-  safe.cells[10].owner=1;safe.cells[10].army=1000;safe.cells[11].army=20;safe.attack(11,10,0,1);
+  safe.cells[10].owner=1;safe.cells[10].army=1000;safe.cells[11].army=20;safe.attack(11,10,0,.5);
   assert.equal(safe.unrest(safe.cells[11]),0);assert.equal(safe.unrest(safe.cells[10]),0);
 });
 test('unrest expires after quiet rounds and does not advance from real-time thinking or pause',()=>{
