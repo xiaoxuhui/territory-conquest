@@ -28,7 +28,7 @@ export const SEA_ENTRY_CHANCE=.1;
 export const MAX_PLAYERS=64;
 export function formatArmy(value,style='full'){
   if(!Number.isFinite(value))return Number.isNaN(value)?'—':value<0?'−∞':'∞';
-  if(Math.abs(value)<10000)return String(value);
+  if(Math.abs(value)<(style==='map'?1000:10000))return String(value);
   const [coefficient,power]=value.toExponential(style==='map'?0:2).split('e'),mantissa=String(Number(coefficient)),exponent=String(Number(power));
   return style==='full'?`${mantissa}×10${exponent.replace(/[-0-9]/g,c=>({'-':'⁻','0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹'})[c])}`:`${mantissa}e${exponent}`;
 }
@@ -41,7 +41,11 @@ function newCountry(id,number){
 }
 export function seededRandom(seed) { return () => { let t=seed+=0x6D2B79F5;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296; }; }
 export class Game {
-  constructor({w=10,h=8,humans=1,ai=1,difficulty='normal',seed=1,observerMode='continuous',growthMode='one',ocean=false,terrainMap=null,worldMode='flat',initialSpawns=null,initialRelations=null,secessionMode='repeat'}={}) {
+  constructor({w=10,h=8,humans=1,ai=1,difficulty='normal',seed=1,observerMode='continuous',growthMode='one',ocean=false,terrainMap=null,worldMode='flat',initialSpawns=null,initialRelations=null,secessionMode='repeat',peaceSupport=false,multiFront=false}={}) {
+    if(typeof multiFront!=='boolean')throw new Error('多线作战需设置为开启或关闭');
+    this.multiFront=multiFront;this.pendingMultiFront=null;
+    if(typeof peaceSupport!=='boolean')throw new Error('和平支援反击需设置为开启或关闭');
+    this.peaceSupport=peaceSupport;
     if(!['repeat','protected'].includes(secessionMode))throw new Error('请选择允许再次分裂或仅战争动荡');
     this.secessionMode=secessionMode;
     if(!['flat','earth'].includes(worldMode))throw new Error('请选择平面式或地球式模式');
@@ -63,6 +67,7 @@ export class Game {
     this.attackedBy=Array.from({length:players},()=>Array(players).fill(false));
     this.neutralInitiative=Array(players).fill(null);
     this.aiMarches=Array(players).fill(null);this.marchDecisionTurn=Array(players).fill(-1);
+    this.defenseOrders=Array.from({length:players},()=>[]);
     this.diplomacySettledTurn=-1;this.influenceSettledTurn=-1;this.globalPeaceLevel=0;this.globalHostilityLevel=0;this.lastGlobalDiplomacy=null;this.lastDiplomacyInfluence={peaceful:[],hostile:[]};
     this.cells=Array.from({length:w*h},(_,id)=>({id,owner:-1,homeland:-1,army:0,capital:-1,terrain:terrainMap?.[id]??'land',unrestEvents:[],stableUntil:0}));this.capitalLost=Array(players).fill(false);this.seaAttempts=[];
     this.time=0;this.turn=0;this.running=false;this.paused=false;this.winner=null;this.events=[];this.moves=0;this.captures=0;this.pendingTurn=null;this.roundState=null;this.automaticElapsed=0;this.setObserverMode(observerMode);
@@ -229,7 +234,51 @@ export class Game {
     return !!nation?.rebel&&(nation.origin===b||(nation.cause==='war'&&nation.warOpponent===b));
   }
   unrestEnemies(owner){return this.factions.map((_,id)=>id).filter(id=>id!==owner&&this.attitude(owner,id)===2&&this.cells.some(c=>c.owner===id));}
-  canAttack(from,to){return to<0||from===to||(this.sharesBorder(from,to)&&(this.attitude(from,to)===2||(this.attitude(from,to)===1&&(this.isHuman(from)||this.attackedBy[from]?.[to]===true||(this.neutralInitiative[from]?.turn===this.turn&&this.neutralInitiative[from].allowed)))));}
+  setPeaceSupport(enabled){
+    if(typeof enabled!=='boolean')throw new Error('和平支援反击需设置为开启或关闭');
+    if(enabled===this.peaceSupport)return;this.peaceSupport=enabled;
+    if(!enabled)this.defenseOrders=this.factions.map(()=>[]);
+    this.addEvent(`和平支援反击已${enabled?'开启':'关闭'}；支援照常扣兵，支援进攻不降低外交关系`,'system');
+  }
+  activeDefenseOrders(owner,alive=null){
+    if(!this.peaceSupport)return [];
+    if(!this.defenseOrders[owner]?.length)return [];
+    alive??=new Set(this.cells.filter(c=>c.owner>=0).map(c=>c.owner));
+    return this.defenseOrders[owner]=(this.defenseOrders[owner]??[]).filter(o=>o.beneficiary!==owner&&o.enemy!==owner&&alive.has(owner)&&alive.has(o.beneficiary)&&alive.has(o.enemy)&&this.attitude(owner,o.beneficiary)===0);
+  }
+  notifyPeaceSupport(attacker,defender){
+    if(!this.peaceSupport)return;
+    const alive=new Set(this.cells.filter(c=>c.owner>=0).map(c=>c.owner));
+    for(const owner of alive){
+      if(owner===attacker||owner===defender||this.attitude(owner,defender)!==0)continue;
+      const orders=this.activeDefenseOrders(owner,alive),existing=orders.find(o=>o.beneficiary===defender);
+      if(existing?.enemy===attacker){existing.turn=this.turn;continue;}
+      this.defenseOrders[owner]=[{beneficiary:defender,enemy:attacker,turn:this.turn},...orders.filter(o=>o.beneficiary!==defender)];this.aiPlans[owner]=null;this.aiMarches[owner]=null;
+      this.addEvent(`${this.factions[owner].name}将支援${this.factions[defender].name}，反击进攻者${this.factions[attacker].name}`,'defense',owner);
+    }
+  }
+  defenseBlockade(owner,beneficiary){
+    const visited=new Uint8Array(this.cells.length),queue=[],blockers=new Set();
+    for(const c of this.cells)if(c.owner===owner){visited[c.id]=1;queue.push(c.id);}
+    for(let q=0;q<queue.length;q++)for(const id of this.neighbors(queue[q])){
+      if(visited[id])continue;visited[id]=1;const other=this.cells[id].owner;
+      if(other===beneficiary)return {blocked:false,blockers:new Set()};
+      if(other>=0&&other!==owner&&this.attitude(owner,other)===0){blockers.add(other);continue;}
+      queue.push(id);
+    }
+    return {blocked:blockers.size>0,blockers};
+  }
+  peaceSupportContext(owner,target){
+    if(target<0||target===owner)return null;
+    for(const order of this.activeDefenseOrders(owner)){
+      if(target===order.beneficiary)continue;
+      if(target===order.enemy)return {...order,breakingBlockade:false};
+      if(this.attitude(owner,target)===0){const blockade=this.defenseBlockade(owner,order.beneficiary);if(blockade.blocked&&blockade.blockers.has(target))return {...order,breakingBlockade:true};}
+    }
+    return null;
+  }
+  ordinaryCanAttack(from,to){return this.attitude(from,to)===2||(this.attitude(from,to)===1&&(this.isHuman(from)||this.attackedBy[from]?.[to]===true||(this.neutralInitiative[from]?.turn===this.turn&&this.neutralInitiative[from].allowed)));}
+  canAttack(from,to){return to<0||from===to||(this.sharesBorder(from,to)&&(!!this.peaceSupportContext(from,to)||this.ordinaryCanAttack(from,to)));}
   prepareNeutralInitiative(owner){
     if(this.neutralInitiative[owner]?.turn!==this.turn)this.neutralInitiative[owner]={turn:this.turn,allowed:this.rng()<NEUTRAL_ATTACK_CHANCE};
   }
@@ -305,6 +354,7 @@ export class Game {
       this.attackedBy.forEach(row=>row.push(false));this.attackedBy.push(Array(this.players).fill(false));
       this.neutralInitiative.push(null);
       this.aiMarches.push(null);this.marchDecisionTurn.push(-1);
+      this.defenseOrders.push([]);
       const enemies=new Set(homelandEnemies);
       this.relations[owner][homeland]=cause==='drain'?2:0;
       for(const enemy of enemies)this.relations[owner][enemy]=2;
@@ -326,17 +376,53 @@ export class Game {
   }
   addEvent(text,kind='system',owner=-1){this.events.unshift({text,kind,owner,time:this.time});this.events=this.events.slice(0,30);}
   sent(from,ratio=0.5){return Math.max(0,Math.min(from.army-1,Math.floor(from.army*Math.min(1,Math.max(0,ratio)))));}
-  attack(fromId,toId,owner,ratio=0.5){
+  setMultiFront(enabled){
+    if(typeof enabled!=='boolean')throw new Error('多线作战需设置为开启或关闭');
+    if(this.roundState||this.resolving){this.pendingMultiFront=enabled===this.multiFront?null:enabled;return;}
+    this.multiFront=enabled;this.pendingMultiFront=null;this.aiPlans.fill(null);
+  }
+  beginRound(){
+    if(!this.roundState){
+      this.turn++;
+      this.roundState={actions:[],contested:new Set(),actedHumans:new Set(),multiFront:this.multiFront,
+        startOwners:this.multiFront?Int32Array.from(this.cells,c=>c.owner):null,usedSources:new Set(),capturedThisRound:new Set()};
+    }
+    return this.roundState;
+  }
+  sourceBlockReason(id,owner){
+    const round=this.roundState;
+    if(!this.multiFront||!round)return '';
+    if(round.startOwners[id]!==owner||round.capturedThisRound.has(id))return '本轮新占或收复的格子，要等下一轮才能出兵';
+    if(round.usedSources.has(id))return '这个格子本轮已经出兵，请选择其他领土';
+    return '';
+  }
+  canUseSource(id,owner){return this.cells[id]?.owner===owner&&!this.sourceBlockReason(id,owner);}
+  readySources(owner){return this.cells.filter(c=>c.army>=2&&this.canUseSource(c.id,owner));}
+  freeFrontAction(action){return this.multiFront&&action?.ok&&['attack','support'].includes(action.kind);}
+  recordSource(action){
+    const round=this.roundState;
+    if(!round?.multiFront||!action?.ok||!['attack','reinforce','support'].includes(action.kind))return;
+    round.usedSources.add(action.fromId);
+    if(action.captured)round.capturedThisRound.add(action.toId);
+  }
+  attack(fromId,toId,owner,ratio=0.5,{defenseOrder=null}={}){
     if(!this.running||this.paused||this.winner!==null)return {ok:false,reason:'战斗尚未进行'};
     const from=this.cells[fromId],to=this.cells[toId];
     if(!from||!to||from.owner!==owner||!this.neighbors(fromId).includes(toId))return {ok:false,reason:'只能向上下左右相邻的领土出兵'};
+    const sourceReason=this.sourceBlockReason(fromId,owner);if(sourceReason)return {ok:false,reason:sourceReason};
     if(!this.canAttack(owner,to.owner))return {ok:false,reason:this.attitude(owner,to.owner)===0?'对该国处于和平，先在外交面板宣战才能进攻':'对该国处于中立，未遭到该国进攻，不能主动攻击；可先宣战'};
     const amount=this.sent(from,ratio);
     if(amount<1)return {ok:false,reason:'兵力不足，至少留守 1 名士兵'};
     const sea=this.trySeaEntry(owner,to);if(!sea.ok)return sea;
-    const oldOwner=to.owner,fromBefore=from.army,toBefore=to.army;from.army-=amount;
+    if(this.multiFront)this.beginRound();
+    const oldOwner=to.owner,routeDefense=defenseOrder&&oldOwner>=0&&oldOwner!==owner&&oldOwner!==defenseOrder.beneficiary&&this.activeDefenseOrders(owner).includes(defenseOrder)?{...defenseOrder,breakingBlockade:this.attitude(owner,oldOwner)===0&&oldOwner!==defenseOrder.enemy}:null;
+    const defense=this.peaceSupportContext(owner,oldOwner)??routeDefense,fromBefore=from.army,toBefore=to.army;from.army-=amount;
     const hostileAttack=oldOwner>=0&&oldOwner!==owner&&this.attitude(owner,oldOwner)===2;
-    if(oldOwner>=0&&oldOwner!==owner){if(to.homeland<0)to.homeland=oldOwner;this.reactToAttack(owner,oldOwner);}
+    if(oldOwner>=0&&oldOwner!==owner){
+      if(to.homeland<0)to.homeland=oldOwner;
+      if(defense)this.attackedBy[oldOwner][owner]=true;else this.reactToAttack(owner,oldOwner);
+      this.notifyPeaceSupport(owner,oldOwner);
+    }
     const secessionExempt=oldOwner>=0&&oldOwner!==owner&&this.secessionExempt(owner,oldOwner);
     let captured=false;
     if(to.owner===owner)to.army+=amount;
@@ -355,15 +441,16 @@ export class Game {
     if(amount>=3&&amount/fromBefore>=.75&&!secessionExempt&&(enemies.length||nonCombat))this.recordUnrest(from,'drain',{actor:owner,hostile:enemies.length>0,nonCombat:!!nonCombat,enemies});
     const location=`${columnLabel(toId%this.w)}${Math.floor(toId/this.w)+1}`;
     if(kind==='reinforce')this.addEvent(`${this.factions[owner].name}增援 ${location}：${formatArmy(toBefore)} + ${formatArmy(amount)} = ${formatArmy(to.army)}`,'reinforce',owner);
-    else if(oldOwner>=0)this.addEvent(`${this.factions[owner].name}出兵 ${formatArmy(amount)} 进攻 ${location}：守军 ${formatArmy(toBefore)} − ${formatArmy(Math.min(amount,toBefore))} = ${formatArmy(Math.max(0,toBefore-amount))}${secessionExempt?'；免动荡：目标是'+(this.factions[owner].origin===oldOwner?'祖国':'此次分裂的交战对手')+'（保留已有动荡）':''}`,'battle',owner);
+    else if(oldOwner>=0)this.addEvent(`${this.factions[owner].name}出兵 ${formatArmy(amount)} 进攻 ${location}：守军 ${formatArmy(toBefore)} − ${formatArmy(Math.min(amount,toBefore))} = ${formatArmy(Math.max(0,toBefore-amount))}${defense?'；支援'+this.factions[defense.beneficiary].name+'，外交关系不下降':''}${secessionExempt?'；免动荡：目标是'+(this.factions[owner].origin===oldOwner?'祖国':'此次分裂的交战对手')+'（保留已有动荡）':''}`,'battle',owner);
     if(this.isHuman(owner)){this.moves++;if(captured)this.captures++;}
     if(captured&&oldOwner>=0){
       this.addEvent(`${this.factions[owner].name}攻占了${this.factions[oldOwner].name}的领土`,'battle',owner);
       if(!this.cells.some(c=>c.owner===oldOwner))this.addEvent(`${this.factions[oldOwner].name}失去全部领土，已出局`,'eliminated',oldOwner);
     }
+    this.recordSource({ok:true,kind,fromId,toId,captured});
     if(captured)this.resolveGrowthLimits();
     this.checkWinner();
-    return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,hostileAttack,secessionExempt,seaEntry:!!sea.seaEntry,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
+    return {ok:true,amount,captured,oldOwner,owner,toId,fromId,kind,hostileAttack,secessionExempt,peaceSupport:!!defense,defenseFor:defense?.beneficiary,breakingBlockade:defense?.breakingBlockade??false,seaEntry:!!sea.seaEntry,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
   }
   checkWinner(){const owner=this.cells[0].owner;if(owner>=0&&this.cells.every(c=>c.owner===owner)){this.winner=owner;this.running=false;this.pendingHumanControl=null;this.addEvent(`${this.factions[owner].name}占领全图，获得胜利！`,'victory',owner);}}
   get resolving(){return this.pendingTurn!==null;}
@@ -420,9 +507,9 @@ export class Game {
     return {ok:true,actions:this.finishTurn([],options)};
   }
   finishTurn(actions,{defer=false}={}){
-    if(!this.roundState){this.turn++;this.roundState={actions:[],contested:new Set(),actedHumans:new Set()};}
-    const round=this.roundState;
+    const round=this.beginRound();
     round.actions.push(...actions);actions.forEach(a=>this.recordCombat(a));
+    if(round.multiFront&&this.currentHuman!==null&&actions.length&&actions.every(a=>this.freeFrontAction(a))&&this.readySources(this.currentHuman).length&&this.winner===null)return actions;
     if(this.currentHuman!==null)round.actedHumans.add(this.currentHuman);
     if(this.winner!==null)return actions;
     // Each local human gets one action before any computer or growth phase.
@@ -435,6 +522,7 @@ export class Game {
     return this.pendingTurn?actions:round.actions;
   }
   recordCombat(action){
+    this.recordSource(action);
     if(action?.ok&&action.oldOwner>=0&&action.oldOwner!==action.owner){
       this.roundState.contested.add(action.fromId);this.roundState.contested.add(action.toId);
     }
@@ -444,10 +532,10 @@ export class Game {
     if(!pending||this.paused)return null;
     if(this.winner!==null){this.pendingTurn=null;return null;}
     if(pending.index<pending.owners.length){
-      // Rotate initiative; each computer still receives just one action.
-      const owner=pending.owners[pending.index++];
+      const owner=pending.owners[pending.index];
       const action=this.aiMove(owner);
       if(action?.ok){pending.actions.push(action);this.recordCombat(action);}
+      if(!this.freeFrontAction(action)||!this.readySources(owner).length)pending.index++;
       if(this.winner!==null)this.pendingTurn=null;
       return {kind:'action',owner,action};
     }
@@ -464,6 +552,7 @@ export class Game {
     });
     const diplomacy=this.resolveDiplomacy(),secessions=this.resolveSecessions();
     this.pendingTurn=null;this.roundState=null;this.currentHuman=this.aliveHumans()[0]??null;
+    if(this.pendingMultiFront!==null)this.setMultiFront(this.pendingMultiFront);
     if(this.pendingHumanControl){const {owner,human}=this.pendingHumanControl;this.applyHumanControl(owner,human);}
     this.checkWinner();return {kind:'growth',changes,secessions,diplomacy};
   }
@@ -495,8 +584,11 @@ export class Game {
     const from=this.cells[fromId],to=this.cells[toId];
     if(!this.running||this.paused||this.winner!==null||!from||!to||from.owner!==owner||to.owner<0||to.owner===owner||this.attitude(owner,to.owner)!==0||!this.neighbors(fromId).includes(toId))return {ok:false,reason:'援军只能送往相邻的和平国家'};
     if(!Number.isInteger(amount)||amount<1||amount>MARCH_MAX_ARMY||amount>=from.army)return {ok:false,reason:'援军需保留驻军，每次最多 5 人'};
+    const sourceReason=this.sourceBlockReason(fromId,owner);if(sourceReason)return {ok:false,reason:sourceReason};
+    if(this.multiFront)this.beginRound();
     const fromBefore=from.army,toBefore=to.army;from.army-=amount;to.army+=amount;
     this.addEvent(`${this.factions[owner].name}送出 ${formatArmy(amount)} 人支援${this.factions[to.owner].name}：守军 ${formatArmy(toBefore)} + ${formatArmy(amount)} = ${formatArmy(to.army)}`,'support',owner);
+    this.recordSource({ok:true,kind:'support',fromId,toId});
     return {ok:true,kind:'support',owner,oldOwner:owner,recipient:to.owner,fromId,toId,amount,captured:false,fromBefore,fromAfter:from.army,toBefore,toAfter:to.army};
   }
   advanceMarch(owner){
@@ -505,6 +597,7 @@ export class Game {
     if(!head||head.owner!==owner||attitude!==(march.kind==='support'?0:2)||!this.cells.some(c=>c.owner===march.target)){
       this.aiMarches[owner]=null;return null;
     }
+    if(!this.canUseSource(head.id,owner))return null;
     const path=this.marchPath(owner,march.target,march.head);
     if(!path){this.aiMarches[owner]=null;return null;}
     const amount=Math.min(MARCH_MAX_ARMY,head.army-1,Math.max(1,Math.floor(head.army*.1)));
@@ -533,6 +626,48 @@ export class Game {
     }
     return null;
   }
+  peaceSupportDistances(owner,order,target,allowPeace){
+    const distance=new Int32Array(this.cells.length).fill(-1),queue=[];
+    for(const c of this.cells)if(c.owner===target&&!this.seaBlocked(owner,c)){distance[c.id]=0;queue.push(c.id);}
+    for(let q=0;q<queue.length;q++)for(const id of this.neighbors(queue[q])){
+      if(distance[id]>=0||this.seaBlocked(owner,this.cells[id]))continue;
+      const other=this.cells[id].owner;
+      if(other===order.beneficiary&&other!==target)continue;
+      if(other>=0&&other!==owner&&other!==target&&other!==order.enemy&&this.attitude(owner,other)===0&&!allowPeace)continue;
+      distance[id]=distance[queue[q]]+1;queue.push(id);
+    }
+    return distance;
+  }
+  peaceSupportMove(owner,owned){
+    const contexts=new Map(),contextFor=target=>{if(!contexts.has(target))contexts.set(target,this.peaceSupportContext(owner,target));return contexts.get(target);};
+    for(const order of this.activeDefenseOrders(owner)){
+      const blockade=this.defenseBlockade(owner,order.beneficiary);
+      for(const target of [order.enemy,order.beneficiary]){
+        const distance=this.peaceSupportDistances(owner,order,target,blockade.blocked);let best=null,bestScore=-Infinity;
+        for(const from of owned){
+          if(from.army<2||distance[from.id]<1)continue;
+          for(const id of this.neighbors(from.id)){
+            if(distance[id]!==distance[from.id]-1)continue;
+            const to=this.cells[id],recipient=to.owner===order.beneficiary;let ratio=1,amount=this.sent(from,1);
+            if(recipient)amount=Math.min(MARCH_MAX_ARMY,from.army-1,Math.max(1,Math.floor(from.army*.1)));
+            else if(to.owner>=0&&to.owner!==owner){
+              const context=contextFor(to.owner);
+              if(!context&&this.attitude(owner,to.owner)===1&&!this.isHuman(owner))this.prepareNeutralInitiative(owner);
+              if(!context&&!this.ordinaryCanAttack(owner,to.owner))continue;
+              if(this.sent(from,.5)>to.army){ratio=.5;amount=this.sent(from,.5);}else if(amount<=to.army)continue;
+            }
+            const score=amount/(distance[from.id]+.75);
+            if(score>bestScore){bestScore=score;best={from,to,recipient,ratio,amount};}
+          }
+        }
+        if(!best)continue;
+        const action=best.recipient?this.supportNeighbor(best.from.id,best.to.id,owner,best.amount):this.attack(best.from.id,best.to.id,owner,best.ratio,{defenseOrder:order});
+        if(action.ok){action.defenseFor=order.beneficiary;action.defenseEnemy=order.enemy;if(best.to.owner===owner&&action.oldOwner===owner)this.addEvent(`${this.factions[owner].name}正集结兵力，支援${this.factions[order.beneficiary].name}反击${this.factions[order.enemy].name}`,'defense',owner);}
+        return action;
+      }
+    }
+    return null;
+  }
   aiMove(owner){
     const action=this.aiAction(owner);
     // A failed sea attempt is free; use the country's one action on land.
@@ -540,15 +675,18 @@ export class Game {
   }
   aiAction(owner){
     if(!this.running||this.paused||this.winner!==null)return null;
-    const owned=this.cells.filter(c=>c.owner===owner);if(!owned.length)return null;
+    const territory=this.cells.filter(c=>c.owner===owner);if(!territory.length)return null;
+    const owned=this.multiFront?territory.filter(c=>c.army>=2&&this.canUseSource(c.id,owner)):territory;
     if(this.capitalLost[owner]){
       // Rebuilding is this round's action, not a passive restoration on recapture.
-      const site=[...owned].sort((a,b)=>(Math.min(b.army,999)-this.aiThreat(b.id,owner)*4)-(Math.min(a.army,999)-this.aiThreat(a.id,owner)*4))[0];
+      const site=[...territory].sort((a,b)=>(Math.min(b.army,999)-this.aiThreat(b.id,owner)*4)-(Math.min(a.army,999)-this.aiThreat(a.id,owner)*4))[0];
       return this.constructCapital(site.id,owner);
     }
+    if(!owned.length)return null;
+    if(this.activeDefenseOrders(owner).length)return this.peaceSupportMove(owner,owned);
     const nearbyEnemy=owned.some(c=>this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner&&this.attitude(owner,this.cells[id].owner)===2));
     if(this.aiMarches[owner]?.kind==='support'&&nearbyEnemy)this.aiMarches[owner]=null;
-    if(this.aiMarches[owner]){const action=this.advanceMarch(owner);if(action||this.aiMarches[owner])return action;}
+    if(this.aiMarches[owner]&&!this.sourceBlockReason(this.aiMarches[owner].head,owner)){const action=this.advanceMarch(owner);if(action||this.aiMarches[owner])return action;}
     if(!nearbyEnemy){const action=this.tryStartMarch(owner,owned);if(action)return action;}
     if(owned.some(c=>this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner&&this.attitude(owner,this.cells[id].owner)===1&&!this.attackedBy[owner][this.cells[id].owner])))this.prepareNeutralInitiative(owner);
     const counts=Array(this.players).fill(0);this.cells.forEach(c=>{if(c.owner>=0)counts[c.owner]++;});
@@ -563,13 +701,13 @@ export class Game {
     const hostile=fronts.filter(f=>this.cells[f.target].owner>=0&&this.attitude(owner,this.cells[f.target].owner)===2);
     const retaliation=fronts.filter(f=>this.cells[f.target].owner>=0&&this.attitude(owner,this.cells[f.target].owner)===1);
     const candidates=hostile.length?hostile:retaliation.length?retaliation:neutral;
-    if(!neutral.length&&this.capitals(owner).length===1&&owned.length>=4){
+    if(!neutral.length&&this.capitals(owner).length===1&&territory.length>=4){
       const site=owned.filter(c=>!this.isCapital(c)&&!this.neighbors(c.id).some(id=>this.cells[id].owner>=0&&this.cells[id].owner!==owner))
         .sort((a,b)=>b.army-a.army)[0];
       if(site)return this.constructCapital(site.id,owner);
     }
     let plan=this.aiPlans[owner];
-    const invalid=!plan||this.cells[plan.rally].owner!==owner||!candidates.some(f=>f.target===plan.target);
+    const invalid=!plan||!this.canUseSource(plan.rally,owner)||!candidates.some(f=>f.target===plan.target);
     if(invalid||plan.age>=Math.max(128,this.cells.length)){
       let best=null,bestScore=-Infinity;
       for(const f of candidates){
@@ -593,7 +731,7 @@ export class Game {
     }
     plan.age++;
     // Keep the target, but use a substantially stronger adjacent launch tile.
-    for(const n of this.neighbors(plan.target))if(this.cells[n].owner===owner&&this.cells[n].army>this.cells[plan.rally].army*1.5+4)plan.rally=n;
+    for(const n of this.neighbors(plan.target))if(this.canUseSource(n,owner)&&this.cells[n].army>this.cells[plan.rally].army*1.5+4)plan.rally=n;
     const from=this.cells[plan.rally],to=this.cells[plan.target];
     const safety=this.difficulty==='easy'?.6:this.difficulty==='hard'?1.1:1;
     const reserve=to.owner===-1?0:Math.max(1,Math.ceil(this.aiThreat(to.id,owner)*safety));

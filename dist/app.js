@@ -12,7 +12,7 @@ const COUNTRY_VIEWS={
 };
 let wins=[];
 try{const saved=JSON.parse(localStorage.getItem('territory-wins')||'[]');if(Array.isArray(saved))wins=saved.filter(n=>Number.isInteger(n)&&n>=0&&n<6);}catch{}
-let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:10,h:10,observerMode:'continuous',observerSpeed:1,growthMode:'one',terrainMap:null,worldMode:'flat',initialSpawns:null,initialRelations:null,secessionMode:'repeat'};
+let config={mode:'campaign',level:0,difficulty:'normal',humans:1,ai:3,w:10,h:10,observerMode:'continuous',observerSpeed:1,growthMode:'one',terrainMap:null,worldMode:'flat',initialSpawns:null,initialRelations:null,secessionMode:'repeat',peaceSupport:false,multiFront:false};
 let savedCustomMap=null;
 try{const saved=JSON.parse(localStorage.getItem('territory-custom-map')||'null');if(saved&&[10,30,100].includes(saved.w)&&saved.h===saved.w&&Array.isArray(saved.cells)&&saved.cells.length===saved.w*saved.h&&saved.cells.every(t=>t==='land'||t==='sea')&&saved.cells.includes('land')){new Game({w:saved.w,h:saved.h,humans:1,ai:0,terrainMap:saved.cells,initialSpawns:saved.starts??null,initialRelations:saved.relations??null});savedCustomMap=saved;if(saved.active!==false){assignMapSetup(saved,true);const capacity=Math.min(64,saved.cells.filter(t=>t==='land').length);config.humans=Math.min(config.humans,capacity);config.ai=Math.min(config.ai,capacity-config.humans);}}}catch{}
 function mapPlayers(map){return Number.isInteger(map.humans)&&map.humans>=0&&Number.isInteger(map.ai)&&map.ai>=0&&map.humans+map.ai>=1&&map.humans+map.ai<=Math.min(64,map.cells.filter(t=>t==='land').length)?{humans:map.humans,ai:map.ai}:null;}
@@ -27,7 +27,7 @@ function factionColumn(f,id){
   const el=document.createElement('div');el.className='faction-column';el.dataset.factionId=id;el.setAttribute('role','listitem');el.style.setProperty('--faction',f.color);
   el.innerHTML=`<div class="faction-bar-track"><div class="faction-bar"><strong class="faction-bar-value">1</strong></div></div><span class="faction-bar-name">${f.name}</span><span class="faction-bar-controller">${game.isHuman(id)?'P'+(id+1):f.rebel?'新国 · 电脑':'电脑'}</span>`;return el;
 }
-function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,growthMode:config.growthMode,secessionMode:config.secessionMode,worldMode:config.worldMode,ocean:true,terrainMap:config.mode==='custom'?config.terrainMap:null,initialSpawns:config.mode==='custom'?config.initialSpawns:null,initialRelations:config.mode==='custom'?config.initialRelations:null,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
+function currentOptions(){const l=LEVELS[config.level];return {w:config.mode==='campaign'?l.w:config.w,h:config.mode==='campaign'?l.h:config.h,humans:config.mode==='campaign'?1:config.humans,ai:config.mode==='campaign'?l.ai:config.ai,difficulty:config.difficulty,observerMode:config.observerMode,growthMode:config.growthMode,secessionMode:config.secessionMode,peaceSupport:config.peaceSupport,multiFront:config.multiFront,worldMode:config.worldMode,ocean:true,terrainMap:config.mode==='custom'?config.terrainMap:null,initialSpawns:config.mode==='custom'?config.initialSpawns:null,initialRelations:config.mode==='custom'?config.initialRelations:null,seed:20261121+config.level*71+(config.mode==='custom'?31:0)};}
 function updateMapView(){
   const area=$('board').closest('.map-area'),large=game.w>20||game.h>20,fitted=large&&mapView==='fit';
   $('mapViewControls').hidden=!large;area.classList.toggle('fit-map',fitted);
@@ -94,6 +94,7 @@ function renderSettings(){
   $('randomMapBtn').disabled=!config.terrainMap;$('loadMapBtn').hidden=!savedCustomMap||!!config.terrainMap;
   $('growthMode').value=game.growthMode;
   $('secessionMode').value=game.secessionMode;
+  $('peaceSupport').value=game.peaceSupport?'on':'off';
   $('secessionModeNote').textContent=game.secessionMode==='repeat'?'新国进攻无关第三国、后方大量调兵可累计动荡；即使没有敌国也能再次分裂。仅直接进攻祖国或此次分裂的交战对手才豁免，与新国自身是否普通／永久敌对无关。':'仅战争动荡：无敌对战争时，后方调兵不新增动荡。任何模式都不能仅凭普通或永久敌对获得战争豁免。';
   $('secessionModeNote').textContent+=' 可在对局中切换；切换本身不清除已有动荡。';
   $('worldMode').value=game.worldMode;$('worldModeNote').textContent=game.worldMode==='earth'?'上下边缘相连，左右边缘相连。可点击对边格子或用方向键跨边进攻、调兵。切换模式会开启新对局。':'四周是墙，不能跨出边界。切换模式会开启新对局。';
@@ -119,13 +120,14 @@ function clickTile(id){
   if(!game.running){if(game.cells[id].owner===lastController){selected=id;render();}toast('点击「开始征战」，开启你的征途');return;}
   if(id===selected){selected=null;render();return;}
   const cell=game.cells[id];
+  if(selected!==null&&game.sourceBlockReason(selected,lastController)&&cell.owner===lastController){selected=id;render();return;}
   if(selected!==null&&game.cells[selected].owner===lastController&&game.neighbors(selected).includes(id)){
     const result=game.playTurn(selected,id,ratio,{defer:true});
     if(!result.ok){toast(result.reason);render();return;}
     clearToast();flashActions(result.actions);
     lastBattle={action:result,reinforced:0,grew:0};resolutionAt=playbackTime+550;
     tone(result.captured?680:300);
-    if(cell.owner===lastController)selected=id;
+    if(cell.owner===lastController)selected=game.canUseSource(id,lastController)?id:null;
     else if(result.amount>0)toast(`派出 ${formatArmy(result.amount)}，守军 ${formatArmy(result.toBefore)} → ${formatArmy(result.toAfter)}；未攻占`);
     if(result.captured&&result.oldOwner===-1&&game.captures===1)game.addEvent('首块领土已占领！领土越多，兵力增长越快。','system',0);
     if(selected!==null&&game.cells[selected].owner!==lastController)selected=null;
@@ -175,6 +177,7 @@ function renderBattleResult(){
   $('combatResult').textContent=a.kind==='reinforce'
     ? `己方增援 ${coord(a.toId)}：${formatArmy(a.toBefore)} + ${formatArmy(a.amount)} = ${formatArmy(a.toAfter)}`
     : `${game.factions[a.owner].name}派出 ${formatArmy(a.amount)} · 守军 ${formatArmy(a.toBefore)} − ${formatArmy(Math.min(a.amount,a.toBefore))} = ${formatArmy(Math.max(0,a.toBefore-a.amount))}${a.captured?` · 已攻占，驻军 ${formatArmy(a.toAfter)}`:' · 未攻占'}${reinforced?` · 随后增援 +${formatArmy(reinforced)}`:''}${grew?` · 回合增兵 +${formatArmy(grew)}`:''}${a.oldOwner>=0?' · 交战格本回合不自动增兵':''}`;
+  if(a.peaceSupport)$('combatResult').textContent+=` · 支援${game.factions[a.defenseFor].name}，外交关系不下降`;
 }
 function render(){
   if(lastControlRevision!==game.controlRevision){lastControlRevision=game.controlRevision;spectating=game.automatic;lastController=game.currentHuman;selected=null;hovered=null;lastBattle=null;resultShown=false;$('resultDialog').close();renderSettings();}
@@ -192,19 +195,20 @@ function render(){
   $('currentPlayer').style.setProperty('--player-color',faction?.color||game.factions[0].color);
   $('yourLandLabel').textContent=faction?`${faction.name}领土`:'阵营领土';
   $('yourLandSquare').style.background=faction?`rgba(${faction.rgb},.3)`:'#46523a';$('yourLandSquare').style.borderColor=faction?.color||'#72846b';
-  const neighbors=selected!==null&&game.cells[selected]?.owner===lastController&&game.running&&!game.paused&&!game.resolving&&!spectating?game.neighbors(selected).filter(id=>!game.seaBlocked(lastController,game.cells[id])&&game.canAttack(lastController,game.cells[id].owner)):[];
+  const neighbors=selected!==null&&game.canUseSource(selected,lastController)&&game.running&&!game.paused&&!game.resolving&&!spectating?game.neighbors(selected).filter(id=>!game.seaBlocked(lastController,game.cells[id])&&game.canAttack(lastController,game.cells[id].owner)):[];
   $('board').setAttribute('aria-busy',game.resolving);
   const now=performance.now();
   game.cells.forEach((c,i)=>{
     const el=tiles[i],f=c.owner>=0?game.factions[c.owner]:null,flash=flashes.get(i);
     const unrest=f?game.unrest(c):0,capital=game.isCapital(c),isSelected=i===selected,reachable=neighbors.includes(i),flashClass=flash&&flash.until>now?(flash.captured?'flash':'attacked'):'';
-    const renderKey=`${c.terrain}|${c.owner}|${c.army}|${capital}|${isSelected}|${reachable}|${unrest}|${flashClass}|${c.owner>=0&&c.owner===lastController}`;
+    const sourceReason=game.multiFront&&c.owner===lastController?game.sourceBlockReason(i,lastController):'';
+    const renderKey=`${c.terrain}|${c.owner}|${c.army}|${capital}|${isSelected}|${reachable}|${unrest}|${flashClass}|${c.owner>=0&&c.owner===lastController}|${sourceReason}`;
     if(el._renderKey===renderKey)return;el._renderKey=renderKey;
-    const cls=`cell ${c.terrain==='sea'?'sea':'land'} ${f?'owned':'empty'} ${c.army>=10000?'large-army':''} ${capital?'capital':''} ${unrest>=2?'unstable':''} ${isSelected?'selected':''} ${reachable?'reachable':''} ${game.w>=16?'small':''} ${flashClass}`;
+    const cls=`cell ${c.terrain==='sea'?'sea':'land'} ${f?'owned':'empty'} ${c.army>=10000?'large-army':''} ${capital?'capital':''} ${unrest>=2?'unstable':''} ${isSelected?'selected':''} ${reachable?'reachable':''} ${game.w>=16?'small':''} ${flashClass} ${sourceReason?'source-spent':''}`;
     if(el.className!==cls)el.className=cls;
     const label=`${coord(i)}，${c.terrain==='sea'?'海洋，':'陆地，'}${f?(c.owner===lastController?'你的领土':f.name+'领土')+'，'+c.army+' 兵力'+(game.isCapital(c)?'，首都':'')+`，动荡 ${unrest}/${UNREST_LIMIT}`:'未占领'}`;
-    el.title=label;
-    if(el.getAttribute('aria-label')!==label)el.setAttribute('aria-label',label);
+    el.title=label+(sourceReason?'，'+sourceReason:'');
+    if(el.getAttribute('aria-label')!==el.title)el.setAttribute('aria-label',el.title);
     el.setAttribute('aria-pressed',i===selected);
     el.style.setProperty('--faction',f?.color||'#aac56f');
     const html=f?`${c.terrain==='sea'?'<span class="cell-sea-mark" aria-hidden="true">≈</span>':''}${game.isCapital(c)?'<svg class="cell-flag"><use href="#i-flag"/></svg>':''}<span class="cell-army">${formatArmy(c.army,'map')}</span><span class="cell-faction">${f.symbol}</span>`:'';
@@ -213,7 +217,11 @@ function render(){
   $('timer').textContent=formatTime(game.time);
   $('turnLabel').textContent=`第 ${game.turn} 回合`;
   $('waitBtn').hidden=!game.running||game.continuous;$('waitBtn').disabled=game.paused||game.resolving;
-  $('waitBtn').textContent=game.automatic?'推进一回合':'蓄兵一回合';
+  $('waitBtn').textContent=game.automatic?'推进一回合':game.multiFront?'结束本国行动':'蓄兵一回合';
+  const requestedMultiFront=game.pendingMultiFront??game.multiFront;
+  $('multiFrontBtn').setAttribute('aria-pressed',String(requestedMultiFront));
+  $('multiFrontBtn').textContent=`多线作战：${requestedMultiFront?'开启':'关闭'}${game.pendingMultiFront!==null?'（下轮生效）':''}`;
+  $('multiFrontNote').textContent=game.multiFront?'向外出兵不消耗本国这一步，同一来源格每轮只能出兵一次；内部调兵消耗一步，结束本国行动。新占或收复的格子下轮才能出兵。玩家和电脑规则相同。':'开启后，向外出兵不消耗一步，内部调兵消耗一步；同一来源格每轮只出兵一次，新占格子下轮才能出兵。';
   const capitals=lastController===null?[]:game.capitals(lastController),hasCapital=capitals.length>0;
   const capitalSource=$('capitalSource'),previousSource=capitalSource.value;
   const sourceOptions=capitals.map(c=>`<option value="${c.id}">迁出 ${coord(c.id)}</option>`).join('');
@@ -241,9 +249,16 @@ function render(){
   else if(game.resolving){$('hintTitle').textContent='正在结算本回合';$('hintText').textContent='先显示战斗扣兵，再显示电脑行动和增兵。';}
   else if(game.automatic){$('hintTitle').textContent=game.observerMode==='step'?'走一步停一步':game.running?'自动运行中':'纯电脑自动对战';$('hintText').textContent=game.observerMode==='step'?(game.running?'点击「推进一回合」或按 E，完成一轮后停下。':'点击「开始观战」后，可逐回合推进电脑对战。'):game.running?'电脑会自行出兵和增兵，无需点击，可随时暂停。':'点击「开始观战」后，电脑会自动连续对战。';}
   else if(!game.running){$('hintTitle').textContent=game.humans===0?'观看电脑之间的领土争夺':'从你的第一块领土开始';$('hintText').textContent=game.humans>1?'各位玩家在同一台设备上轮流操作。':'回合制对战，你思考时电脑不动。';}
-  else if(selected!==null&&game.cells[selected].owner===lastController){const c=game.cells[selected];$('hintTitle').textContent=`${coord(selected)} 已选中 · 可派出 ${formatArmy(game.sent(c,ratio))} 兵力`;$('hintText').textContent='出兵才推进回合；可以慢慢思考，不必抢点。';}
-  else{$('hintTitle').textContent=game.humans>1?`轮到玩家 ${lastController+1} · ${faction.name}`:'轮到你了，慢慢规划';$('hintText').textContent='选中己方领土出兵，或蓄兵一回合。';}
+  else if(selected!==null&&game.cells[selected].owner===lastController){const c=game.cells[selected],blocked=game.sourceBlockReason(selected,lastController);$('hintTitle').textContent=blocked?`${coord(selected)} · 本轮不能出兵`:`${coord(selected)} 已选中 · 可派出 ${formatArmy(game.sent(c,ratio))} 兵力`;$('hintText').textContent=blocked|| (game.multiFront?'向外出兵不消耗一步；内部调兵消耗一步，结束本国行动。每个来源格只可出兵一次。':'出兵才推进回合；可以慢慢思考，不必抢点。');}
+  else{$('hintTitle').textContent=game.humans>1?`轮到玩家 ${lastController+1} · ${faction.name}`:'轮到你了，慢慢规划';$('hintText').textContent=game.multiFront?`本国还有 ${game.readySources(lastController).length} 个格子可出兵；也可结束本国行动。`:'选中己方领土出兵，或蓄兵一回合。';}
   const stats=game.stats(),mine=lastController===null?stats.reduce((a,b)=>a.land>=b.land?a:b):stats[lastController],total=game.cells.length;
+  const living=stats.filter(s=>s.land>0),nationCount=living.length,ownedLand=living.reduce((sum,s)=>sum+s.land,0),totalArmy=living.reduce((sum,s)=>sum+s.army,0);
+  const averageLand=nationCount?ownedLand/nationCount:0,averageArmy=nationCount?totalArmy/nationCount:0;
+  $('battleNationCount').textContent=String(nationCount);
+  for(const [id,value,unit]of [['battleAverageLand',averageLand,'格'],['battleAverageArmy',averageArmy,'人']]){
+    const exact=value.toLocaleString('zh-CN',{maximumFractionDigits:2}),el=$(id);
+    el.textContent=id==='battleAverageArmy'&&value>=10000?formatArmy(value,'compact'):exact;el.dataset.value=String(value);el.title=`每个存活国家平均 ${exact} ${unit}`;el.setAttribute('aria-label',el.title);
+  }
   $('occupationLabel').textContent=lastController===null?'领先阵营占领率':`${faction.name}占领率`;
   const chartMax=Math.max(2,...stats.map(s=>s[chartMetric]));
   const chartLabel=chartMetric==='army'?'兵力数量':'领土数量';
@@ -321,6 +336,8 @@ function renderDiplomacy(stats=game.stats()){
   }).join('')||'<p class="diplomacy-empty">当前没有其他存活国家。</p>';
   if($('diplomacyList').innerHTML!==rows)$('diplomacyList').innerHTML=rows;
   $('diplomacyOrigin').textContent=nation.rebel?`因${nation.cause==='drain'?'内部矛盾（反复调走驻军）':'战乱'}独立，原属国：${game.factions[nation.origin].name}。${nation.warOpponent==null?'无额外交战敌国':'此次分裂的交战对手只有：'+game.factions[nation.warOpponent].name}。建国关系永久固定，全局升降及受击均不能解除；只有直接进攻祖国及此次分裂的交战对手才豁免该次战斗，后方调兵不沿用战争豁免。对无关国家默认中立，远方关系保持不变。`:'初始国家，各方向态度独立变化。';
+  const defenseOrders=game.activeDefenseOrders(from);$('peaceSupportStatus').hidden=!defenseOrders.length;
+  if(defenseOrders.length){const order=defenseOrders[0],blocked=game.defenseBlockade(from,order.beneficiary).blocked;$('peaceSupportStatus').textContent=`和平支援：保护${game.factions[order.beneficiary].name}，反击${game.factions[order.enemy].name}。${blocked?'到友国的所有通路均被和平国家挡住，允许支援突破。':'有可绕行通路，不进攻沿途的和平国家。'}支援照常扣兵，支援进攻不降低外交关系。`;}
   if(nation.rebel)$('diplomacyOrigin').textContent+=game.secessionMode==='repeat'?' 当前允许再次分裂。':' 当前使用仅战争动荡规则。';
   if(nation.peaceLevel||nation.hostilityLevel)$('diplomacyOrigin').textContent+=' 本国累计提供和平加成 '+(nation.peaceLevel??0)+' 次、敌对加成 '+(nation.hostilityLevel??0)+' 次（每种整局最多一次）。';
   if(nation.growthLimited)$('diplomacyOrigin').textContent+=` 领土曾超过原国家${game.factions[nation.parent??nation.origin].name}，${game.flatGrowth(from)?'按到目标加一，普通格每轮 +1、首都 +3':'按到目标持续，保留出格增兵倍率，新占普通格同样按建国基数增兵'}。`;
@@ -339,6 +356,7 @@ function renderIntel(){
   else if(c.owner>=0&&f.birthArmy!==undefined)note+=` · 新国建国基数 ${formatArmy(f.birthArmy)}，${game.isCapital(c)?'首都 ×3':'普通格 ×1'}`;
   if(c.owner>=0)note+=game.turn<c.stableUntil?` · 新国稳定期 ${c.stableUntil-game.turn} 回合`:` · 动荡 ${game.unrest(c)}/${UNREST_LIMIT}${game.unrest(c)>=2?'，注意分裂风险':''}`;
   if(c.owner>=0&&lastController!==null&&c.owner!==lastController)note+=` · 对${game.factions[lastController].name}${ATTITUDES[game.attitude(c.owner,lastController)]}，反向${ATTITUDES[game.attitude(lastController,c.owner)]}`;
+  if(c.owner>=0&&lastController!==null&&c.owner!==lastController){const defense=game.peaceSupportContext(lastController,c.owner);if(defense)note+=` · 可支援${game.factions[defense.beneficiary].name}进攻此国，正常扣兵，外交关系不下降`;}
   $('tileIntel').innerHTML=`<div class="tile-preview ${c.army>=10000?'large-army':''}" style="${f?`color:${f.color};border-color:${f.color}77;background:rgba(${f.rgb},.15)`:'background:#2e3d27;border-color:#596d48;color:#a3b68c'}">${c.owner>=0?formatArmy(c.army):'◇'}</div><div class="tile-detail"><div class="coordinate">${coord(id)}<span>${f?f.symbol:''}</span></div><strong>${f?(c.owner===lastController?'你的领土':f.name+'阵营'):(c.terrain==='sea'?'未占领的海洋':'未占领的土地')}</strong><p class="intel-note">${note}</p></div>`;
 }
 function checkResult(){
@@ -395,6 +413,8 @@ $('randomMapBtn').onclick=()=>requestReset(()=>{clearMapSetup();persistCustomMap
 $('loadMapBtn').onclick=()=>{if(!savedCustomMap)return;const land=savedCustomMap.cells.filter(t=>t==='land').length;if(!mapPlayers(savedCustomMap)&&land<config.humans+config.ai){toast(`已存地图只有 ${land} 格陆地，请先把总人数调至 ${land} 位以内`);return;}requestReset(()=>{assignMapSetup(savedCustomMap,true);persistCustomMap(true);});};
 $('growthMode').onchange=e=>{config.growthMode=e.target.value;game.setGrowthMode(config.growthMode);renderSettings();render();};
 $('secessionMode').onchange=e=>{config.secessionMode=e.target.value;game.setSecessionMode(config.secessionMode);renderSettings();render();};
+$('peaceSupport').onchange=e=>{config.peaceSupport=e.target.value==='on';game.setPeaceSupport(config.peaceSupport);renderSettings();render();};
+$('multiFrontBtn').onclick=()=>{config.multiFront=!(game.pendingMultiFront??game.multiFront);game.setMultiFront(config.multiFront);render();};
 $('worldMode').onchange=e=>{const mode=e.target.value;if(mode!==config.worldMode)requestReset(()=>config.worldMode=mode);};
 $('troopControl').onclick=e=>{if(e.target.dataset.ratio){ratio=+e.target.dataset.ratio;document.querySelectorAll('[data-ratio]').forEach(b=>{b.classList.toggle('active',+b.dataset.ratio===ratio);b.setAttribute('aria-pressed',+b.dataset.ratio===ratio);});render();}};
 $('helpBtn').onclick=()=>{pausedByHelp=game.running&&!game.paused;if(pausedByHelp)game.paused=true;$('helpDialog').showModal();render();};
